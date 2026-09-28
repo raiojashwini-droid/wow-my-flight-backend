@@ -1,0 +1,199 @@
+// Prisma schema for WowMyFlight CRM PostgreSQL Database
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. Users (Agents, Admins, Super Admins)
+// ─────────────────────────────────────────────────────────────────────────────
+model User {
+  id             String            @id @default(uuid())
+  name           String
+  email          String            @unique
+  passwordHash   String?
+  role           String            @default("consultant")
+  phone          String?
+  avatar         String?
+  status         String            @default("active")
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  
+  assignedLeads  Lead[]            @relation("AgentLeads")
+  callLogs       CallLog[]         @relation("AgentCallLogs")
+  dispositions   CallDisposition[] @relation("AgentDispositions")
+  chatSessions   ChatSession[]     @relation("AgentChatSessions")
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. Leads (Customer Flight Inquiries & Pipeline)
+// ─────────────────────────────────────────────────────────────────────────────
+model Lead {
+  id                String       @id @default(uuid())
+  firstName         String
+  lastName          String?
+  email             String?
+  phone             String?
+  nationality       String?
+  preferredLanguage String?      @default("English")
+  serviceId         String?      @default("economy")
+  status            String       @default("New Lead")
+  origin            String?
+  destination       String?
+  travelDate        String?
+  passengers        Int?         @default(1)
+  budget            Float?
+  notes             String?
+  assignedAgentId   String?
+  assignedAgent     User?        @relation("AgentLeads", fields: [assignedAgentId], references: [id])
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@map("leads")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. Clients (Confirmed / Booked Travelers)
+// ─────────────────────────────────────────────────────────────────────────────
+model Client {
+  id          String       @id @default(uuid())
+  firstName   String
+  lastName    String?
+  email       String?
+  phone       String?
+  nationality String?
+  tier        String?      @default("Standard")
+  totalSpent  Float?       @default(0)
+  status      String       @default("Active")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@map("clients")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. Call Logs (Real Telnyx Call Sessions)
+// ─────────────────────────────────────────────────────────────────────────────
+model CallLog {
+  id              String            @id @default(uuid())
+  callControlId   String?           @unique
+  direction       String            @default("outbound")
+  fromNumber      String
+  toNumber        String
+  agentId         String?
+  agentName       String?
+  agent           User?             @relation("AgentCallLogs", fields: [agentId], references: [id])
+  status          String            @default("initiated")
+  startedAt       DateTime          @default(now())
+  answeredAt      DateTime?
+  endedAt         DateTime?
+  durationSeconds Int               @default(0)
+  recordingUrl    String?
+  disposition     String?
+  notes           String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  dispositions    CallDisposition[]
+
+  @@map("call_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. Call Dispositions (Call Outcomes)
+// ─────────────────────────────────────────────────────────────────────────────
+model CallDisposition {
+  id              String       @id @default(uuid())
+  callId          String
+  callControlId   String?
+  callLog         CallLog?     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  agentId         String?
+  agent           User?        @relation("AgentDispositions", fields: [agentId], references: [id])
+  disposition     String
+  notes           String?
+  createdAt       DateTime     @default(now())
+
+  @@map("call_dispositions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. SMS Logs (Incoming & Outgoing SMS)
+// ─────────────────────────────────────────────────────────────────────────────
+model SMSLog {
+  id               String       @id @default(uuid())
+  telnyxMessageId  String?      @unique
+  direction        String       @default("outbound")
+  fromNumber       String
+  toNumber         String
+  text             String
+  status           String       @default("sent")
+  agentId          String?
+  createdAt        DateTime     @default(now())
+
+  @@map("sms_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. Live Web Chat Sessions & Messages
+// ─────────────────────────────────────────────────────────────────────────────
+model ChatSession {
+  id              String        @id @default(uuid())
+  customerName    String        @default("Guest")
+  customerEmail   String?
+  customerPhone   String?
+  status          String        @default("active")
+  agentId         String?
+  agent           User?         @relation("AgentChatSessions", fields: [agentId], references: [id])
+  lastActivityAt  DateTime      @default(now())
+  createdAt       DateTime      @default(now())
+
+  messages        ChatMessage[]
+
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id              String        @id @default(uuid())
+  sessionId       String
+  session         ChatSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  senderType      String        @default("customer")
+  senderId        String?
+  senderName      String?
+  text            String
+  type            String?       @default("text")
+  attachment      String?
+  createdAt       DateTime      @default(now())
+
+  @@map("chat_messages")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. Omnichannel Communication Timeline
+// ─────────────────────────────────────────────────────────────────────────────
+model Communication {
+  id              String        @id @default(uuid())
+  channel         String
+  direction       String?       @default("outbound")
+  customer        String?
+  customerPhone   String?
+  customerEmail   String?
+  from            String?
+  to              String?
+  subject         String?
+  message         String?
+  agent           String?
+  status          String?       @default("Completed")
+  timestamp       DateTime      @default(now())
+  durationSeconds Int?          @default(0)
+  callControlId   String?
+  createdAt       DateTime      @default(now())
+
+  @@map("communications")
+}

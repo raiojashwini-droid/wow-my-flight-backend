@@ -1,18 +1,19 @@
 /**
  * callStore.js
- * In-memory store for call logs, dispositions, and active call tracking.
- * This will be replaced by a real database (PostgreSQL) in Phase 2.
+ * In-memory store + Prisma PostgreSQL persistence for Call Logs, Dispositions, and Active Calls.
+ * Resilient design: fast in-memory operations with asynchronous database synchronization.
  */
 
 const { v4: uuidv4 } = require('uuid');
+const { prisma, isDbConnected } = require('../db');
 
 // Active calls map: callControlId -> call object
 const activeCalls = new Map();
 
-// All call logs (persisted in memory during server session)
+// In-memory call logs cache
 const callLogs = [];
 
-// Call dispositions
+// Call dispositions cache
 const dispositions = [];
 
 /**
@@ -22,11 +23,11 @@ function createCallLog({ callControlId, direction, fromNumber, toNumber, agentId
   const log = {
     id: uuidv4(),
     callControlId,
-    direction,          // 'outbound' | 'inbound'
+    direction: direction || 'outbound',
     fromNumber,
     toNumber,
-    agentId,
-    agentName,
+    agentId: agentId || null,
+    agentName: agentName || 'Agent',
     status: 'initiated',
     startedAt: new Date().toISOString(),
     answeredAt: null,
@@ -39,7 +40,35 @@ function createCallLog({ callControlId, direction, fromNumber, toNumber, agentId
   };
 
   callLogs.push(log);
-  activeCalls.set(callControlId, log);
+  if (callControlId) {
+    activeCalls.set(callControlId, log);
+  }
+
+  // Asynchronously persist to PostgreSQL
+  if (prisma) {
+    prisma.callLog.upsert({
+      where: { callControlId: callControlId || log.id },
+      update: {
+        status: log.status,
+        durationSeconds: log.durationSeconds,
+      },
+      create: {
+        id: log.id,
+        callControlId: log.callControlId,
+        direction: log.direction,
+        fromNumber: log.fromNumber,
+        toNumber: log.toNumber,
+        agentId: log.agentId,
+        agentName: log.agentName,
+        status: log.status,
+        startedAt: new Date(log.startedAt),
+        durationSeconds: log.durationSeconds,
+      },
+    }).catch((err) => {
+      console.warn('[PostgreSQL] Async callLog create warning:', err.message);
+    });
+  }
+
   return log;
 }
 
@@ -47,11 +76,30 @@ function createCallLog({ callControlId, direction, fromNumber, toNumber, agentId
  * Update an existing call log by callControlId
  */
 function updateCallLog(callControlId, updates) {
-  const log = callLogs.find(l => l.callControlId === callControlId);
+  const log = callLogs.find((l) => l.callControlId === callControlId);
   if (log) {
     Object.assign(log, updates);
     if (activeCalls.has(callControlId)) {
       activeCalls.set(callControlId, log);
+    }
+
+    // Asynchronously update in PostgreSQL
+    if (prisma && callControlId) {
+      const dbUpdates = {};
+      if (updates.status) dbUpdates.status = updates.status;
+      if (updates.answeredAt) dbUpdates.answeredAt = new Date(updates.answeredAt);
+      if (updates.endedAt) dbUpdates.endedAt = new Date(updates.endedAt);
+      if (updates.durationSeconds !== undefined) dbUpdates.durationSeconds = updates.durationSeconds;
+      if (updates.recordingUrl) dbUpdates.recordingUrl = updates.recordingUrl;
+      if (updates.disposition) dbUpdates.disposition = updates.disposition;
+      if (updates.notes !== undefined) dbUpdates.notes = updates.notes;
+
+      prisma.callLog.updateMany({
+        where: { callControlId },
+        data: dbUpdates,
+      }).catch((err) => {
+        console.warn('[PostgreSQL] Async callLog update warning:', err.message);
+      });
     }
   }
   return log;
@@ -71,11 +119,11 @@ function markCallAnswered(callControlId) {
  * Mark a call as ended and calculate duration
  */
 function markCallEnded(callControlId) {
-  const log = callLogs.find(l => l.callControlId === callControlId);
+  const log = callLogs.find((l) => l.callControlId === callControlId);
   if (log) {
     const endedAt = new Date().toISOString();
     const startTime = new Date(log.answeredAt || log.startedAt);
-    const durationSeconds = Math.floor((new Date(endedAt) - startTime) / 1000);
+    const durationSeconds = Math.max(0, Math.floor((new Date(endedAt) - startTime) / 1000));
     updateCallLog(callControlId, {
       status: 'completed',
       endedAt,
@@ -96,21 +144,39 @@ function saveRecording(callControlId, recordingUrl) {
 /**
  * Save a call disposition after the call ends
  */
-function saveDisposition({ callId, agentId, disposition, notes }) {
+function saveDisposition({ callId, callControlId, agentId, disposition, notes }) {
   const entry = {
     id: uuidv4(),
     callId,
+    callControlId,
     agentId,
-    disposition, // e.g. 'interested', 'callback', 'quoted', 'booked', 'no_answer', 'voicemail', 'wrong_number', 'not_interested'
-    notes,
+    disposition,
+    notes: notes || '',
     createdAt: new Date().toISOString(),
   };
   dispositions.push(entry);
 
-  // Also update the call log
-  const log = callLogs.find(l => l.id === callId);
+  // Update memory log
+  const log = callLogs.find((l) => l.id === callId || l.callControlId === (callControlId || callId));
   if (log) {
     updateCallLog(log.callControlId, { disposition, notes });
+  }
+
+  // Persist to PostgreSQL
+  if (prisma) {
+    prisma.callDisposition.create({
+      data: {
+        id: entry.id,
+        callId: log?.id || callId,
+        callControlId: callControlId || log?.callControlId || null,
+        agentId: agentId || null,
+        disposition,
+        notes: notes || '',
+        createdAt: new Date(entry.createdAt),
+      },
+    }).catch((err) => {
+      console.warn('[PostgreSQL] Async disposition save warning:', err.message);
+    });
   }
 
   return entry;
@@ -122,7 +188,7 @@ function saveDisposition({ callId, agentId, disposition, notes }) {
 function getCallLogs({ agentId, limit = 50 } = {}) {
   let logs = [...callLogs].reverse();
   if (agentId) {
-    logs = logs.filter(l => l.agentId === agentId);
+    logs = logs.filter((l) => l.agentId === agentId);
   }
   return logs.slice(0, limit);
 }
@@ -131,7 +197,7 @@ function getCallLogs({ agentId, limit = 50 } = {}) {
  * Get a single call log by callControlId
  */
 function getCallByControlId(callControlId) {
-  return callLogs.find(l => l.callControlId === callControlId);
+  return callLogs.find((l) => l.callControlId === callControlId);
 }
 
 /**
