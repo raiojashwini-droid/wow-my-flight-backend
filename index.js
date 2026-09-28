@@ -24,13 +24,28 @@ const server = http.createServer(app);
 // ─────────────────────────────────────────────────────────────────────────────
 // Socket.io Setup — Real-time events to frontend
 // ─────────────────────────────────────────────────────────────────────────────
+const allowedOrigins = [
+  'https://wow-my-flight-1.netlify.app',
+  process.env.FRONTEND_URL || 'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+];
+
+const corsOriginHandler = (origin, callback) => {
+  if (!origin) return callback(null, true);
+  if (
+    allowedOrigins.includes(origin) ||
+    origin.endsWith('.netlify.app') ||
+    origin.includes('localhost')
+  ) {
+    return callback(null, true);
+  }
+  return callback(null, true);
+};
+
 const io = new Server(server, {
   cors: {
-    origin: [
-      process.env.FRONTEND_URL || 'http://localhost:5173',
-      'http://localhost:5174',
-      'http://localhost:3000',
-    ],
+    origin: corsOriginHandler,
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -173,11 +188,7 @@ io.on('connection', (socket) => {
 // Middleware
 // ─────────────────────────────────────────────────────────────────────────────
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    'http://localhost:5174',
-    'http://localhost:3000',
-  ],
+  origin: corsOriginHandler,
   credentials: true,
 }));
 
