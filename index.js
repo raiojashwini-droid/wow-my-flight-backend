@@ -16,6 +16,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 
 const telnyxRoutes = require('./routes/telnyx');
+const traveloproRoutes = require('./routes/travelopro');
 const chatStore = require('./store/chatStore');
 
 const app = express();
@@ -208,6 +209,12 @@ app.get('/health', (req, res) => {
       connectionId: process.env.TELNYX_CONNECTION_ID,
       defaultNumber: process.env.TELNYX_DEFAULT_FROM_NUMBER,
     },
+    travelopro: {
+      configured: !!(process.env.TRAVELOPRO_USER_ID && process.env.TRAVELOPRO_PASSWORD),
+      userId: process.env.TRAVELOPRO_USER_ID,
+      apiBase: process.env.TRAVELOPRO_API_BASE,
+      access: process.env.TRAVELOPRO_ACCESS || 'Test',
+    },
   });
 });
 
@@ -215,6 +222,7 @@ app.get('/health', (req, res) => {
 // API Routes
 // ─────────────────────────────────────────────────────────────────────────────
 app.use('/api/telnyx', telnyxRoutes);
+app.use('/api/travelopro', traveloproRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 404 Handler
