@@ -197,3 +197,40 @@ model Communication {
 
   @@map("communications")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. Bookings & Ticketing Queue (Travelopro GDS & CRM Issuance)
+// ─────────────────────────────────────────────────────────────────────────────
+model Booking {
+  id             String    @id @default(uuid())
+  bookingId      String    @unique
+  pnr            String
+  supplier       String    @default("Travelopro GDS")
+  ticketNumber   String?
+  passenger      String
+  name           String?
+  route          String
+  origin         String?
+  destination    String?
+  fare           String    @default("$0.00")
+  taxes          String    @default("$0.00")
+  commission     String    @default("$0.00")
+  amount         String    @default("$0.00")
+  paymentStatus  String    @default("Payment Confirmed")
+  ticketStatus   String    @default("Ready to Issue")
+  timeLimit      String?   @default("24h remaining")
+  ttl            String?   @default("24h remaining")
+  isTtlUrgent    Boolean   @default(false)
+  issuingAgent   String?   @default("Unassigned")
+  issueDateTime  String?
+  date           String?
+  cabinClass     String?   @default("Economy")
+  passengers     Int?      @default(1)
+  airlineCode    String?
+  flightNumber   String?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("bookings")
+}

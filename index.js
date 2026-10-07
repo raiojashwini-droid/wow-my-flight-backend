@@ -17,7 +17,9 @@ const { Server } = require('socket.io');
 
 const telnyxRoutes = require('./routes/telnyx');
 const traveloproRoutes = require('./routes/travelopro');
+const bookingRoutes = require('./routes/bookings');
 const chatStore = require('./store/chatStore');
+const { isDbConnected } = require('./db');
 
 const app = express();
 const server = http.createServer(app);
@@ -204,6 +206,10 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'WowMyFlight CRM Backend',
     timestamp: new Date().toISOString(),
+    database: {
+      connected: isDbConnected(),
+      provider: 'PostgreSQL (Prisma)'
+    },
     telnyx: {
       configured: !!process.env.TELNYX_API_KEY,
       connectionId: process.env.TELNYX_CONNECTION_ID,
@@ -223,6 +229,7 @@ app.get('/health', (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 app.use('/api/telnyx', telnyxRoutes);
 app.use('/api/travelopro', traveloproRoutes);
+app.use('/api/bookings', bookingRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 404 Handler
