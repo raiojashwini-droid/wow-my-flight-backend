@@ -259,4 +259,38 @@ router.post('/:id/issue', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /api/bookings/:id
+// Delete a booking from PostgreSQL Database
+// ─────────────────────────────────────────────────────────────────────────────
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let deleted = false;
+
+    if (prisma) {
+      const existing = await prisma.booking.findFirst({
+        where: {
+          OR: [{ id: id }, { bookingId: id }, { pnr: id }]
+        }
+      });
+      if (existing) {
+        await prisma.booking.delete({ where: { id: existing.id } });
+        deleted = true;
+      }
+    }
+
+    const idx = memoryBookings.findIndex(b => b.id === id || b.bookingId === id || b.pnr === id);
+    if (idx !== -1) {
+      memoryBookings.splice(idx, 1);
+      deleted = true;
+    }
+
+    return res.json({ success: true, deleted, message: `Booking ${id} deleted.` });
+  } catch (err) {
+    console.error('❌ [Bookings API] Error deleting booking:', err);
+    return res.status(500).json({ error: 'Failed to delete booking', message: err.message });
+  }
+});
+
 module.exports = router;
