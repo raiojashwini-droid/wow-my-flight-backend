@@ -18,6 +18,7 @@ const { Server } = require('socket.io');
 const telnyxRoutes = require('./routes/telnyx');
 const traveloproRoutes = require('./routes/travelopro');
 const bookingRoutes = require('./routes/bookings');
+const webhookRoutes = require('./routes/webhooks');
 const chatStore = require('./store/chatStore');
 const { isDbConnected } = require('./db');
 
@@ -221,6 +222,12 @@ app.get('/health', (req, res) => {
       apiBase: process.env.TRAVELOPRO_API_BASE,
       access: process.env.TRAVELOPRO_ACCESS || 'Test',
     },
+    webhooks: {
+      configured: true,
+      ingestEndpoint: '/api/webhooks/website-leads',
+      pollingEndpoint: '/api/webhooks/leads',
+      authHeader: 'x-crm-api-key',
+    },
   });
 });
 
@@ -230,6 +237,7 @@ app.get('/health', (req, res) => {
 app.use('/api/telnyx', telnyxRoutes);
 app.use('/api/travelopro', traveloproRoutes);
 app.use('/api/bookings', bookingRoutes);
+app.use('/api/webhooks', webhookRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 404 Handler
