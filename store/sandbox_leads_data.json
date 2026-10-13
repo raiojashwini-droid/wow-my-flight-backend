@@ -19,9 +19,31 @@
     "serviceId": "business",
     "status": "TEST_LEAD",
     "latestOfferId": "",
-    "leadLastRequestedAt": "2026-10-08T06:25:46.029Z",
-    "inquiryCount": 1,
+    "leadLastRequestedAt": "2026-10-13T11:01:58.470Z",
+    "inquiryCount": 2,
     "inquiryHistory": [
+      {
+        "timestamp": "2026-10-13T11:01:58.470Z",
+        "requestOfferId": "",
+        "providerOfferId": "",
+        "flightSummary": "ONE WAY: DXB ➔ LHR | Cabin: BUSINESS | Pax: 1 (1 Adt, 0 Chd) | Offer: $850 USD | Lead Source: TEST_SUITE",
+        "routes": [
+          {
+            "cabinClass": "BUSINESS",
+            "adultCount": 1,
+            "offeredAmount": 850,
+            "offeredCurrency": "USD",
+            "tripType": "ONE_WAY",
+            "flightRoutes": [
+              {
+                "originAirportCode": "DXB",
+                "destinationAirportCode": "LHR",
+                "departureDateTime": "2026-11-01T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      },
       {
         "timestamp": "2026-10-08T06:25:46.036Z",
         "requestOfferId": "",
@@ -45,10 +67,10 @@
         ]
       }
     ],
-    "notes": "[SANDBOX TEST - 2026-10-08]: ONE WAY: DXB ➔ LHR | Cabin: BUSINESS | Pax: 1 (1 Adt, 0 Chd) | Offer: $850 USD | Lead Source: TEST_SUITE",
+    "notes": "[Returning Request - 2026-10-13]: ONE WAY: DXB ➔ LHR | Cabin: BUSINESS | Pax: 1 (1 Adt, 0 Chd) | Offer: $850 USD | Lead Source: TEST_SUITE\n[SANDBOX TEST - 2026-10-08]: ONE WAY: DXB ➔ LHR | Cabin: BUSINESS | Pax: 1 (1 Adt, 0 Chd) | Offer: $850 USD | Lead Source: TEST_SUITE",
     "assignedAgentId": null,
     "isSandbox": true,
     "createdAt": "2026-10-08T06:25:46.036Z",
-    "updatedAt": "2026-10-08T06:25:46.036Z"
+    "updatedAt": "2026-10-13T11:01:58.470Z"
   }
 ]
