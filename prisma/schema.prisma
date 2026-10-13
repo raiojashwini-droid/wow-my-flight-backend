@@ -234,3 +234,111 @@ model Booking {
 
   @@map("bookings")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. Flight Quotes & Proposals
+// ─────────────────────────────────────────────────────────────────────────────
+model Quote {
+  id             String    @id @default(uuid())
+  quoteId        String    @unique
+  leadId         String?
+  customerName   String
+  customerEmail  String?
+  customerPhone  String?
+  status         String    @default("Draft")
+  origin         String?
+  destination    String?
+  tripType       String?   @default("Round Trip")
+  cabinClass     String?   @default("Economy")
+  passengers     Int?      @default(1)
+  departureDate  String?
+  returnDate     String?
+  airline        String?
+  flightNumber   String?
+  totalPrice     Float     @default(0.0)
+  netPrice       Float     @default(0.0)
+  markup         Float     @default(0.0)
+  serviceFee     Float     @default(0.0)
+  currency       String    @default("USD")
+  validUntil     String?
+  options        Json?
+  notes          String?
+  agentId        String?
+  agentName      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("quotes")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. Payments & Invoices
+// ─────────────────────────────────────────────────────────────────────────────
+model Payment {
+  id             String    @id @default(uuid())
+  invoiceNumber  String    @unique
+  clientId       String?
+  customerName   String
+  customerEmail  String?
+  customerPhone  String?
+  amount         Float     @default(0.0)
+  currency       String    @default("USD")
+  status         String    @default("Pending")
+  method         String?   @default("Stripe")
+  serviceName    String?
+  dueDate        String?
+  paidAt         DateTime?
+  paymentLink    String?
+  transactionId  String?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. Consultations & Calendar Appointments
+// ─────────────────────────────────────────────────────────────────────────────
+model Consultation {
+  id             String    @id @default(uuid())
+  clientName     String
+  clientEmail    String?
+  clientPhone    String?
+  agentId        String?
+  agentName      String?
+  serviceType    String?   @default("Flight Consultation")
+  dateTime       String
+  status         String    @default("Scheduled")
+  meetingLink    String?
+  notes          String?
+  outcome        String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("consultations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. Customer Documents & Verification
+// ─────────────────────────────────────────────────────────────────────────────
+model Document {
+  id             String    @id @default(uuid())
+  clientId       String?
+  customerName   String
+  fileName       String
+  fileType       String?
+  fileSize       String?
+  fileUrl        String?
+  category       String    @default("Passport")
+  status         String    @default("Pending")
+  comment        String?
+  uploadedAt     DateTime  @default(now())
+  reviewedAt     DateTime?
+  reviewedBy     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("documents")
+}
+
