@@ -19,6 +19,7 @@ const telnyxRoutes = require('./routes/telnyx');
 const traveloproRoutes = require('./routes/travelopro');
 const bookingRoutes = require('./routes/bookings');
 const webhookRoutes = require('./routes/webhooks');
+const leadRoutes = require('./routes/leads');
 const chatStore = require('./store/chatStore');
 const { isDbConnected } = require('./db');
 
@@ -238,6 +239,7 @@ app.use('/api/telnyx', telnyxRoutes);
 app.use('/api/travelopro', traveloproRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/leads', leadRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 404 Handler
