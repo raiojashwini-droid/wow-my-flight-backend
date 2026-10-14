@@ -1,0 +1,12 @@
+[
+  {
+    "id": "LOG-771",
+    "customer": "Ambassador Harold Vance",
+    "phone": "+1 (555) 345-6789",
+    "agent": "Sofia Rodriguez (Sales)",
+    "disposition": "Quote Sent",
+    "notes": "Discussed BA-142 First Class seat selection. Dispatched PDF Quote Q-8812.",
+    "time": "Today 10:06 AM",
+    "actionTaken": "Updated Status to Proposal Sent"
+  }
+]

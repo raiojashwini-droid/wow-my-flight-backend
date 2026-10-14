@@ -11,8 +11,10 @@
 
 const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const path = require('path');
 const Telnyx = require('telnyx');
-const { prisma } = require('../db');
+const { prisma, isDbConnected } = require('../db');
 const callStore = require('../store/callStore');
 
 const telnyx = Telnyx(process.env.TELNYX_API_KEY);
@@ -595,6 +597,110 @@ router.post('/webhooks/messaging', (req, res) => {
   }
 
   res.status(200).json({ received: true });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. CALL DISPOSITIONS: GET & POST /api/telnyx/dispositions
+// ─────────────────────────────────────────────────────────────────────────────
+const DISPOSITION_FILE = path.join(__dirname, '../store/disposition_logs.json');
+
+const DISPOSITION_CONFIG = [
+  { name: 'Interested', category: 'Positive', color: '#059669', icon: '👍', action: 'Create follow-up task and keep lead active.' },
+  { name: 'Quote Sent', category: 'Positive', color: '#2563EB', icon: '📄', action: 'Update lead status to Quote Sent and save quote activity.' },
+  { name: 'Payment Pending', category: 'Positive', color: '#059669', icon: '💳', action: 'Start payment reminder workflow and SLA timer.' },
+  { name: 'Booked', category: 'Positive', color: '#16A34A', icon: '✈️', action: 'Convert lead into booking and notify ticketing team.' },
+  { name: 'Callback Requested', category: 'Follow-up', color: '#D97706', icon: '⏰', action: 'Schedule callback with reminder and notification.' },
+  { name: 'Busy', category: 'Follow-up', color: '#C59B27', icon: '⏳', action: 'Create retry task after configured interval.' },
+  { name: 'No Answer', category: 'Follow-up', color: '#9CA3AF', icon: '📵', action: 'Increment contact attempt counter and schedule retry.' },
+  { name: 'Not Interested', category: 'Negative', color: '#6B7280', icon: '❌', action: 'Move lead to Lost pipeline and require lost reason.' },
+  { name: 'Wrong Number', category: 'Negative', color: '#DC2626', icon: '⚠️', action: 'Flag lead for verification and possible duplicate review.' },
+  { name: 'Escalated', category: 'Escalation', color: '#7C3AED', icon: '🚨', action: 'Notify Team Leader and create escalation task.' },
+  { name: 'Complaint', category: 'Escalation', color: '#B91C1C', icon: '👿', action: 'Create complaint case and notify customer support.' }
+];
+
+router.get('/dispositions', (req, res) => {
+  try {
+    let logs = [];
+    if (fs.existsSync(DISPOSITION_FILE)) {
+      logs = JSON.parse(fs.readFileSync(DISPOSITION_FILE, 'utf8'));
+    }
+    return res.json({
+      success: true,
+      categories: DISPOSITION_CONFIG,
+      data: logs
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/dispositions', async (req, res) => {
+  try {
+    const { customer, phone, agent, disposition, notes, actionTaken } = req.body;
+    if (!disposition) {
+      return res.status(400).json({ success: false, error: 'disposition is required' });
+    }
+
+    let logs = [];
+    if (fs.existsSync(DISPOSITION_FILE)) {
+      try { logs = JSON.parse(fs.readFileSync(DISPOSITION_FILE, 'utf8')); } catch (e) { }
+    }
+
+    const newLog = {
+      id: `LOG-${Math.floor(100 + Math.random() * 900)}`,
+      customer: customer || 'Customer',
+      phone: phone || '',
+      agent: agent || 'Sales Agent',
+      disposition,
+      notes: notes || '',
+      time: 'Just now',
+      actionTaken: actionTaken || `Updated Status to ${disposition}`
+    };
+
+    logs.unshift(newLog);
+    const dir = path.dirname(DISPOSITION_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DISPOSITION_FILE, JSON.stringify(logs, null, 2), 'utf8');
+
+    // If phone matches a lead in DB, update lead status
+    if (phone && prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
+      try {
+        const cleanPhone = phone.replace(/\D/g, '');
+        const matchingLead = await prisma.lead.findFirst({
+          where: {
+            OR: [
+              { phone: { contains: cleanPhone.slice(-10) } }
+            ]
+          }
+        });
+        if (matchingLead) {
+          const leadStatusMap = {
+            'Quote Sent': 'Proposal Sent',
+            'Booked': 'Booked',
+            'Payment Pending': 'Payment Pending',
+            'Not Interested': 'Lost',
+            'Interested': 'Contacted'
+          };
+          const nextStatus = leadStatusMap[disposition] || 'Contacted';
+          await prisma.lead.update({
+            where: { id: matchingLead.id },
+            data: { status: nextStatus }
+          });
+        }
+      } catch (e) {
+        console.warn('⚠️ [Disposition] Could not auto-sync lead status:', e.message);
+      }
+    }
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('telnyx:disposition_created', newLog);
+    }
+
+    return res.json({ success: true, message: 'Disposition recorded successfully', log: newLog });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 module.exports = router;

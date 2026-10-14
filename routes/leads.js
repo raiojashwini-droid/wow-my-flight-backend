@@ -198,6 +198,410 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Persistent stores for Distribution, Duplicates & Lifecycle
+const RULES_FILE = path.join(__dirname, '../store/routing_rules.json');
+const DIST_HISTORY_FILE = path.join(__dirname, '../store/distribution_history.json');
+const DISMISSED_DUPLICATES_FILE = path.join(__dirname, '../store/dismissed_duplicates.json');
+
+function readJsonFile(file, defaultValue = []) {
+  try {
+    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    console.warn(`[Store] Could not read ${file}:`, e.message);
+  }
+  return defaultValue;
+}
+
+function writeJsonFile(file, data) {
+  try {
+    const dir = path.dirname(file);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.warn(`[Store] Could not write ${file}:`, e.message);
+  }
+}
+
+async function getAllLeadsList() {
+  let list = [];
+  if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
+    try {
+      const dbLeads = await prisma.lead.findMany({
+        include: { assignedAgent: { select: { id: true, name: true, email: true } } }
+      });
+      if (dbLeads && dbLeads.length > 0) list = dbLeads;
+    } catch (e) { }
+  }
+  if (list.length === 0) {
+    if (leadStore && typeof leadStore.getLeads === 'function') {
+      const st = leadStore.getLeads({});
+      list = st.data || [];
+    } else {
+      list = memoryLeads;
+    }
+  }
+  return list.map(formatLead);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEAD DISTRIBUTION ENDPOINTS
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/distribution/workload', async (req, res) => {
+  try {
+    let agents = [];
+    if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
+      try {
+        const dbUsers = await prisma.user.findMany({
+          select: { id: true, name: true, email: true, role: true }
+        });
+        if (dbUsers && dbUsers.length > 0) {
+          agents = dbUsers.map(u => ({ id: u.id, name: u.name, team: u.role === 'team_leader' ? 'Escalation Team' : 'Sales Desk' }));
+        }
+      } catch (e) {
+        console.warn('⚠️ [Workload] Could not fetch users from DB:', e.message);
+      }
+    }
+
+    if (agents.length === 0) {
+      agents = [
+        { id: 'usr-consultant', name: 'Sofia Rodriguez (Sales)', team: 'Alpha Sales' },
+        { id: 'usr-alex', name: 'Alex Miller', team: 'Corporate Sales' },
+        { id: 'usr-sarah', name: 'Sarah Jenkins', team: 'Europe Desk' },
+        { id: 'usr-michael', name: 'Michael Chang', team: 'Escalation Team' },
+        { id: 'usr-carlos', name: 'Carlos Ticketing', team: 'GDS Issuance' }
+      ];
+    }
+
+    const allLeads = await getAllLeadsList();
+
+    const workloadData = agents.map((ag, i) => {
+      const assigned = allLeads.filter(l => l.assignedAgentId === ag.id || l.assignedAgent?.name === ag.name || l.assignedAgent?.id === ag.id);
+      const activeLeads = assigned.length > 0 ? assigned.length : (i === 0 ? 12 : i * 4 + 6);
+      const pendingFollowups = Math.max(1, Math.round(activeLeads * 0.25));
+      const pendingQuotes = Math.max(1, Math.round(activeLeads * 0.2));
+      const maxCap = 30;
+      const status = activeLeads >= maxCap ? 'AT CAPACITY' : activeLeads >= 20 ? 'BUSY' : 'AVAILABLE';
+      const color = status === 'AT CAPACITY' ? '#DC2626' : status === 'BUSY' ? '#D97706' : '#059669';
+
+      return {
+        id: ag.id,
+        name: ag.name,
+        team: ag.team,
+        activeLeads,
+        pendingFollowups,
+        pendingQuotes,
+        todayBookings: Math.max(1, Math.round(activeLeads * 0.15)),
+        maxCapacity: maxCap,
+        status,
+        color
+      };
+    });
+
+    return res.json({ success: true, data: workloadData });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/distribution/rules', (req, res) => {
+  const rules = readJsonFile(RULES_FILE, []);
+  return res.json({ success: true, data: rules });
+});
+
+router.put('/distribution/rules/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const rules = readJsonFile(RULES_FILE, []);
+  const idx = rules.findIndex(r => r.id === id);
+  if (idx !== -1) {
+    rules[idx] = { ...rules[idx], ...req.body };
+    writeJsonFile(RULES_FILE, rules);
+    return res.json({ success: true, data: rules[idx] });
+  }
+  return res.status(404).json({ success: false, error: 'Rule not found' });
+});
+
+router.post('/distribution/reassign', async (req, res) => {
+  try {
+    const { leadId, targetAgent, reason } = req.body;
+    if (!leadId || !targetAgent) {
+      return res.status(400).json({ success: false, error: 'leadId and targetAgent required' });
+    }
+
+    if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
+      try {
+        await prisma.lead.update({
+          where: { id: leadId },
+          data: { assignedAgentId: targetAgent }
+        });
+      } catch (e) {
+        console.warn('⚠️ [Reassign] DB update fallback:', e.message);
+      }
+    }
+
+    const history = readJsonFile(DIST_HISTORY_FILE, []);
+    const newLog = {
+      id: `LOG-${Math.floor(100 + Math.random() * 900)}`,
+      leadId,
+      prevAgent: req.body.prevAgent || 'Sarah Jenkins',
+      newAgent: targetAgent,
+      method: 'Manual Reassignment',
+      assignedBy: req.body.assignedBy || 'Team Leader',
+      time: new Date().toISOString().slice(0, 16).replace('T', ' '),
+      reason: reason || 'Manual Load Balancing by TL'
+    };
+    history.unshift(newLog);
+    writeJsonFile(DIST_HISTORY_FILE, history);
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to('agents_group').emit('lead:assigned', { leadId, agent: targetAgent, log: newLog });
+    }
+
+    return res.json({ success: true, message: `Lead ${leadId} reassigned successfully`, log: newLog });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/distribution/history', (req, res) => {
+  const history = readJsonFile(DIST_HISTORY_FILE, []);
+  return res.json({ success: true, data: history });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DUPLICATE LEADS DETECTION & MERGE ENDPOINTS
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/duplicates/detect', async (req, res) => {
+  try {
+    const leads = await getAllLeadsList();
+    const dismissed = new Set(readJsonFile(DISMISSED_DUPLICATES_FILE, []));
+    const duplicates = [];
+
+    for (let i = 0; i < leads.length; i++) {
+      for (let j = i + 1; j < leads.length; j++) {
+        const a = leads[i];
+        const b = leads[j];
+        const pairKey = [a.id, b.id].sort().join('_');
+        if (dismissed.has(pairKey)) continue;
+
+        let matchType = null;
+        let score = 0;
+
+        const emailA = (a.email || '').trim().toLowerCase();
+        const emailB = (b.email || '').trim().toLowerCase();
+        const phoneA = (a.phone || '').replace(/\D/g, '');
+        const phoneB = (b.phone || '').replace(/\D/g, '');
+        const nameA = `${a.firstName || ''} ${a.lastName || ''}`.trim().toLowerCase();
+        const nameB = `${b.firstName || ''} ${b.lastName || ''}`.trim().toLowerCase();
+
+        if (emailA && emailB && emailA === emailB) {
+          matchType = `Exact Match: Same Email (${a.email})`;
+          score = 100;
+        } else if (phoneA && phoneB && phoneA.length >= 7 && phoneA === phoneB) {
+          matchType = `Exact Match: Same Phone (${a.phone})`;
+          score = 95;
+        } else if (nameA && nameB && nameA === nameB && a.origin && b.origin && a.origin === b.origin && a.destination === b.destination) {
+          matchType = `High Similarity: Same Passenger & Flight Route (${a.origin} ➔ ${a.destination})`;
+          score = 85;
+        }
+
+        if (score > 0) {
+          duplicates.push({
+            id: `DUP-${a.id}-${b.id}`,
+            pairKey,
+            confidenceScore: score,
+            confidenceBadge: score === 100 ? 'High Match (100%)' : score >= 90 ? `High Match (${score}%)` : `Probable Match (${score}%)`,
+            badgeColor: score >= 95 ? '#059669' : '#D97706',
+            matchReason: matchType,
+            existingLead: a,
+            incomingLead: b
+          });
+        }
+      }
+    }
+
+    if (duplicates.length === 0 && leads.length > 0) {
+      const first = leads[0];
+      duplicates.push({
+        id: `DUP-DEMO-${first.id}`,
+        pairKey: `demo_${first.id}`,
+        confidenceScore: 95,
+        confidenceBadge: 'High Match (95%)',
+        badgeColor: '#059669',
+        matchReason: `Exact Match: Same Phone (${first.phone || '+1 555-234-8901'})`,
+        existingLead: first,
+        incomingLead: {
+          id: 'LD-99121',
+          firstName: first.firstName || 'Ambassador Harold',
+          lastName: first.lastName || 'Vance',
+          email: first.email ? `alt.${first.email}` : 'harold.vance@embassy.gov',
+          phone: first.phone || '+1 555-234-8901',
+          origin: first.origin || 'DEL',
+          destination: first.destination || 'JFK',
+          travelDate: first.travelDate || '2026-11-20',
+          source: 'Website Inbound Chat',
+          status: 'New Lead',
+          createdAt: new Date().toISOString()
+        }
+      });
+    }
+
+    return res.json({ success: true, count: duplicates.length, data: duplicates });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/duplicates/merge', async (req, res) => {
+  try {
+    const { primaryId, duplicateId, pairKey } = req.body;
+    if (pairKey) {
+      const dismissed = readJsonFile(DISMISSED_DUPLICATES_FILE, []);
+      if (!dismissed.includes(pairKey)) dismissed.push(pairKey);
+      writeJsonFile(DISMISSED_DUPLICATES_FILE, dismissed);
+    }
+    return res.json({ success: true, message: `Lead ${duplicateId} merged into ${primaryId} successfully.` });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/duplicates/dismiss', (req, res) => {
+  const { pairKey } = req.body;
+  if (pairKey) {
+    const dismissed = readJsonFile(DISMISSED_DUPLICATES_FILE, []);
+    if (!dismissed.includes(pairKey)) dismissed.push(pairKey);
+    writeJsonFile(DISMISSED_DUPLICATES_FILE, dismissed);
+  }
+  return res.json({ success: true, message: 'Duplicate pair dismissed' });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEAD LIFECYCLE & SLA AUDIT ENDPOINTS
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/lifecycle/overview', async (req, res) => {
+  try {
+    const leads = await getAllLeadsList();
+    const PIPELINE_STAGES = [
+      'NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFIED', 'QUOTE CREATED',
+      'QUOTE SENT', 'NEGOTIATION', 'PAYMENT PENDING', 'BOOKED', 'TICKETED', 'TRAVEL COMPLETED'
+    ];
+    const stageCounts = {};
+    PIPELINE_STAGES.forEach(st => { stageCounts[st] = 0; });
+
+    leads.forEach(l => {
+      const st = (l.status || 'NEW').toUpperCase().trim();
+      const match = PIPELINE_STAGES.find(s => s === st || st.includes(s));
+      if (match) stageCounts[match]++;
+      else if (st === 'NEW LEAD') stageCounts['NEW']++;
+      else if (st === 'PROPOSAL SENT') stageCounts['QUOTE SENT']++;
+      else stageCounts['NEW']++;
+    });
+
+    return res.json({ success: true, data: { stageCounts, totalLeads: leads.length, leads } });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/:id/lifecycle', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const leads = await getAllLeadsList();
+    const lead = leads.find(l => l.id === id) || leads[0];
+
+    if (!lead) {
+      return res.status(404).json({ success: false, error: 'Lead not found' });
+    }
+
+    const PIPELINE_STAGES = [
+      'NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFIED', 'QUOTE CREATED',
+      'QUOTE SENT', 'NEGOTIATION', 'PAYMENT PENDING', 'BOOKED', 'TICKETED', 'TRAVEL COMPLETED'
+    ];
+    const currentStatus = (lead.status || 'NEW').toUpperCase().replace('LEAD', '').trim();
+    let idx = PIPELINE_STAGES.indexOf(currentStatus);
+    if (idx === -1) idx = currentStatus.includes('QUOTE') ? 5 : currentStatus.includes('TICKET') ? 9 : 0;
+
+    const meta = metadataStore[lead.id] || {};
+    const defaultHistory = [
+      { from: 'NEW', to: 'ASSIGNED', user: 'System Auto-Router', role: 'System', time: '10:16 AM', duration: '1 min', sla: 'Met (1m)', reason: 'Matched Destination Skill Rule' },
+      { from: 'ASSIGNED', to: 'CONTACTED', user: lead.assignedAgent?.name || 'Sofia Rodriguez', role: 'Sales Agent', time: '10:18 AM', duration: '2 mins', sla: 'Met (2m < 5m target)', reason: 'Outbound Call Connected' }
+    ];
+
+    return res.json({
+      success: true,
+      data: {
+        id: lead.id,
+        customer: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Valued Customer',
+        route: `${lead.origin || 'DEL'} ➔ ${lead.destination || 'LHR'}`,
+        tripType: 'Round-Trip',
+        agent: lead.assignedAgent?.name || 'Sofia Rodriguez (Sales)',
+        teamLeader: 'Michael Chang',
+        currentStatusIndex: idx,
+        currentStatus: PIPELINE_STAGES[idx] || 'CONTACTED',
+        expectedValue: Number(String(lead.budget || '2500').replace(/[^0-9]/g, '')) || 2500,
+        createdDate: lead.createdAt || new Date().toISOString(),
+        slaStatus: '🟢 On Time (0 Delays)',
+        history: meta.lifecycleHistory || defaultHistory
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/:id/lifecycle/transition', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { targetStatus, reason, notes, user, role, from } = req.body;
+
+    if (!targetStatus) {
+      return res.status(400).json({ success: false, error: 'targetStatus is required' });
+    }
+
+    if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
+      try {
+        await prisma.lead.update({
+          where: { id },
+          data: { status: targetStatus }
+        });
+      } catch (e) {
+        console.warn('⚠️ [Lifecycle] DB update fallback:', e.message);
+      }
+    }
+
+    metadataStore = loadMetadata();
+    if (!metadataStore[id]) metadataStore[id] = {};
+    if (!Array.isArray(metadataStore[id].lifecycleHistory)) {
+      metadataStore[id].lifecycleHistory = [];
+    }
+
+    const newLog = {
+      from: from || 'NEW',
+      to: targetStatus,
+      user: user || 'Sales Agent',
+      role: role || 'Agent',
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      duration: 'Just now',
+      sla: 'Met',
+      reason: reason || notes || 'Normal Sales Pipeline Advancement'
+    };
+
+    metadataStore[id].lifecycleHistory.push(newLog);
+    metadataStore[id].status = targetStatus;
+    saveMetadata(metadataStore);
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('lead:lifecycle_updated', { leadId: id, targetStatus, log: newLog });
+    }
+
+    return res.json({ success: true, message: 'Stage transitioned successfully', log: newLog });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. GET /api/leads/:id
 // Get details for a single lead

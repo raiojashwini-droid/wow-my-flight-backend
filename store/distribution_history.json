@@ -1,0 +1,12 @@
+[
+  {
+    "id": "LOG-991",
+    "leadId": "LD-8440",
+    "prevAgent": "Unassigned",
+    "newAgent": "Sofia Rodriguez (Sales)",
+    "method": "Skill-Based (USA Rule)",
+    "assignedBy": "System Auto-Router",
+    "time": "2026-10-14 11:16",
+    "reason": "Matched JFK Destination Skill"
+  }
+]
