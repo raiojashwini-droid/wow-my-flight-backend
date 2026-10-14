@@ -1,15 +1,15 @@
 /**
  * server/routes/clients.js
- * WowMyFlight CRM — Confirmed Travelers / Customer 360 REST API (PostgreSQL Prisma + Resilient Memory Fallback)
+ * WowMyFlight CRM — Confirmed Travelers / Customer 360 REST API (PostgreSQL Prisma + Resilient Persistent Storage)
  * 
  * Features:
- *   - Real PostgreSQL persistence via Prisma (with auto-seeding & upsert protection)
+ *   - Real PostgreSQL persistence via Prisma (with upsert protection)
+ *   - Persistent metadata storage (city, country, passport, preferences) - NO DUMMY FALLBACKS!
  *   - Search, status, and tier filtering
- *   - Full travel profile metadata (passport, cabin class, preferences, city/country)
  *   - Real-time Socket.io broadcasting on create / update / delete
  * 
  * Endpoints:
- *   GET    /api/clients       - Fetch all clients (with search/tier/status filters)
+ *   GET    /api/clients       - Fetch all clients
  *   GET    /api/clients/:id   - Fetch single client by ID
  *   POST   /api/clients       - Create new client & broadcast via Socket.io
  *   PUT    /api/clients/:id   - Update client profile
@@ -18,182 +18,97 @@
 
 const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { prisma, isDbConnected } = require('../db');
 
-// Extended metadata cache for flight-specific passenger preferences
-const clientMetadataMap = new Map();
+// Persistent metadata file
+const METADATA_FILE = path.join(__dirname, '../store/clients_metadata.json');
 
-// Initial seed clients (VIP flight travelers)
-const SEED_CLIENTS = [
-  {
-    id: 'CL-1001',
-    firstName: 'Marcus',
-    lastName: 'Vance',
-    email: 'm.vance@vanceholdings.com',
-    phone: '+1 212 555 0198',
-    nationality: 'United States',
-    country: 'United States',
-    city: 'New York',
-    timezone: 'UTC-05:00 Eastern Time',
-    preferredLanguage: 'English',
-    passportNumber: 'US98234109',
-    passportExpiry: '2031-08-15',
-    preferredCabinClass: 'First Class',
-    seatPreference: 'Aisle (Lie-flat)',
-    mealPreference: 'Vegetarian (Asian Style)',
-    tier: 'VIP Frequent',
-    totalSpent: 18500,
-    status: 'Active',
-    createdAt: new Date('2025-01-10T08:00:00Z'),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'CL-1002',
-    firstName: 'Amina',
-    lastName: 'Al-Mansoor',
-    email: 'amina.almansoor@emiratesinvest.ae',
-    phone: '+971 50 123 4567',
-    nationality: 'United Arab Emirates',
-    country: 'United Arab Emirates',
-    city: 'Dubai',
-    timezone: 'UTC+04:00 Gulf Standard Time',
-    preferredLanguage: 'Arabic & English',
-    passportNumber: 'AE4482019',
-    passportExpiry: '2032-11-20',
-    preferredCabinClass: 'First Class',
-    seatPreference: 'Window Suite',
-    mealPreference: 'Halal Gourmet',
-    tier: 'VIP Elite',
-    totalSpent: 34200,
-    status: 'Active',
-    createdAt: new Date('2025-01-15T09:30:00Z'),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'CL-1003',
-    firstName: 'Liam',
-    lastName: "O'Connor",
-    email: 'liam.oconnor@dublintech.ie',
-    phone: '+353 87 654 3210',
-    nationality: 'Ireland',
-    country: 'Ireland',
-    city: 'Dublin',
-    timezone: 'UTC+00:00 GMT',
-    preferredLanguage: 'English',
-    passportNumber: 'IE7729103',
-    passportExpiry: '2030-05-12',
-    preferredCabinClass: 'Business Class',
-    seatPreference: 'Aisle',
-    mealPreference: 'Standard',
-    tier: 'Frequent Flyer',
-    totalSpent: 12400,
-    status: 'Active',
-    createdAt: new Date('2025-02-01T11:15:00Z'),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'CL-1004',
-    firstName: 'Priya',
-    lastName: 'Sharma',
-    email: 'priya.sharma@innovate.in',
-    phone: '+91 98200 12345',
-    nationality: 'India',
-    country: 'India',
-    city: 'Mumbai',
-    timezone: 'UTC+05:30 IST',
-    preferredLanguage: 'English & Hindi',
-    passportNumber: 'IN8832104',
-    passportExpiry: '2033-04-18',
-    preferredCabinClass: 'Business Class',
-    seatPreference: 'Window',
-    mealPreference: 'Hindu Vegetarian (AVML)',
-    tier: 'Gold',
-    totalSpent: 9600,
-    status: 'Active',
-    createdAt: new Date('2025-02-12T14:20:00Z'),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'CL-1005',
-    firstName: 'Sophia',
-    lastName: 'Laurent',
-    email: 'sophia.laurent@luxevoyage.fr',
-    phone: '+33 6 12 34 56 78',
-    nationality: 'France',
-    country: 'France',
-    city: 'Paris',
-    timezone: 'UTC+01:00 CET',
-    preferredLanguage: 'French & English',
-    passportNumber: 'FR1123490',
-    passportExpiry: '2032-09-30',
-    preferredCabinClass: 'Business Class',
-    seatPreference: 'Aisle',
-    mealPreference: 'Vegetarian',
-    tier: 'Platinum',
-    totalSpent: 26800,
-    status: 'Active',
-    createdAt: new Date('2025-02-20T16:45:00Z'),
-    updatedAt: new Date(),
-  },
-];
-
-// Seed metadata map
-SEED_CLIENTS.forEach((c) => clientMetadataMap.set(c.id, c));
-
-// In-memory fallback cache
-let memoryClients = [...SEED_CLIENTS];
-
-// Ensure PostgreSQL is seeded if empty
-let isSeeded = false;
-async function ensureDbSeeded() {
-  if (isSeeded || !prisma || (typeof isDbConnected === 'function' && !isDbConnected())) return;
+function loadMetadata() {
   try {
-    const count = await prisma.client.count();
-    if (count === 0) {
-      console.log('🌱 [Clients API] Seeding initial clients into PostgreSQL...');
-      for (const client of SEED_CLIENTS) {
-        await prisma.client.create({
-          data: {
-            id: client.id,
-            firstName: client.firstName,
-            lastName: client.lastName,
-            email: client.email,
-            phone: client.phone,
-            nationality: client.nationality,
-            tier: client.tier,
-            totalSpent: client.totalSpent,
-            status: client.status,
-            createdAt: client.createdAt,
-            updatedAt: client.updatedAt,
-          },
-        });
-      }
-      console.log('✅ [Clients API] Seeded initial clients successfully.');
+    if (fs.existsSync(METADATA_FILE)) {
+      return JSON.parse(fs.readFileSync(METADATA_FILE, 'utf8'));
     }
-    isSeeded = true;
-  } catch (err) {
-    console.warn('⚠️ [Clients API] Could not auto-seed clients table:', err.message);
+  } catch (e) {
+    console.warn('⚠️ [Clients API] Could not load clients_metadata.json:', e.message);
+  }
+  return {};
+}
+
+function saveMetadata(data) {
+  try {
+    const dir = path.dirname(METADATA_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(METADATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('⚠️ [Clients API] Could not save clients_metadata.json:', e.message);
   }
 }
 
-// Format client record with frontend-friendly helper fields
+let metadataStore = loadMetadata();
+
+// In-memory fallback cache if PostgreSQL is unreachable (initialized from persistent metadata)
+let memoryClients = Object.values(metadataStore).map(m => ({
+  id: m.id,
+  firstName: m.firstName,
+  lastName: m.lastName,
+  email: m.email,
+  phone: m.phone,
+  nationality: m.nationality || m.country || '',
+  tier: m.tier || 'Standard',
+  totalSpent: m.totalSpent || 0,
+  status: m.status || 'Active',
+  createdAt: m.createdAt || new Date(),
+  updatedAt: m.updatedAt || new Date()
+})).filter(c => c.id && c.firstName);
+
+/**
+ * Format client record using ONLY real entered data (NO HARDCODED DUMMY FALLBACKS)
+ */
 function formatClient(c) {
   if (!c) return null;
-  const meta = clientMetadataMap.get(c.id) || {};
+  const store = loadMetadata();
+  let meta = store[c.id] || metadataStore[c.id];
+  if (!meta) {
+    const values = Object.values(store);
+    meta = values.find(m => (m.email && c.email && m.email.toLowerCase() === c.email.toLowerCase()) || (m.phone && c.phone && m.phone === c.phone)) || {};
+  }
+
+  const city = meta.city || c.city || '';
+  const country = meta.country || c.country || c.nationality || '';
+  const nationality = meta.nationality || c.nationality || country || '';
+  const preferredCabinClass = meta.preferredCabinClass || c.preferredCabinClass || '';
+  const passportNumber = meta.passportNumber || c.passportNumber || '';
+  const passportExpiry = meta.passportExpiry || c.passportExpiry || '';
+  const seatPreference = meta.seatPreference || c.seatPreference || '';
+  const mealPreference = meta.mealPreference || c.mealPreference || '';
+  const timezone = meta.timezone || c.timezone || '';
+  const preferredLanguage = meta.preferredLanguage || c.preferredLanguage || '';
+  const tier = meta.tier || c.tier || 'Standard';
+
+  let totalSpentFormatted = '$0';
+  if (typeof c.totalSpent === 'number') {
+    totalSpentFormatted = `$${c.totalSpent.toLocaleString()}`;
+  } else if (c.totalSpent !== undefined && c.totalSpent !== null && c.totalSpent !== '') {
+    totalSpentFormatted = String(c.totalSpent).startsWith('$') ? String(c.totalSpent) : `$${c.totalSpent}`;
+  }
+
   return {
     ...c,
-    country: meta.country || c.nationality || 'United States',
-    nationality: meta.nationality || c.nationality || 'American',
-    city: meta.city || 'New York',
-    timezone: meta.timezone || 'UTC-05:00 Eastern Time',
-    preferredLanguage: meta.preferredLanguage || 'English',
-    passportNumber: meta.passportNumber || '',
-    passportExpiry: meta.passportExpiry || '2031-10-15',
-    preferredCabinClass: meta.preferredCabinClass || (c.tier?.includes('Elite') || c.tier?.includes('Platinum') ? 'First Class' : 'Business Class'),
-    seatPreference: meta.seatPreference || 'Aisle',
-    mealPreference: meta.mealPreference || 'Vegetarian',
-    totalSpent: typeof c.totalSpent === 'number' ? `$${c.totalSpent.toLocaleString()}` : (c.totalSpent || '$0'),
+    city,
+    country,
+    nationality,
+    preferredCabinClass,
+    passportNumber,
+    passportExpiry,
+    seatPreference,
+    mealPreference,
+    timezone,
+    preferredLanguage,
+    tier,
+    totalSpent: totalSpentFormatted,
   };
 }
 
@@ -205,12 +120,11 @@ function formatClient(c) {
  */
 router.get('/', async (req, res) => {
   try {
+    metadataStore = loadMetadata();
     const { search, status, tier } = req.query;
 
     if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
       try {
-        await ensureDbSeeded();
-
         const where = {};
         if (status && status !== 'all' && status !== 'All') {
           where.status = status;
@@ -320,23 +234,46 @@ router.get('/:id', async (req, res) => {
  */
 router.post('/', async (req, res) => {
   try {
+    metadataStore = loadMetadata();
     const body = req.body || {};
     const clientId = body.id || `CL-${Math.floor(1000 + Math.random() * 9000)}`;
     const now = new Date();
 
-    const firstName = body.firstName || (body.name ? body.name.split(' ')[0] : 'Traveler');
+    const firstName = body.firstName || (body.name ? body.name.split(' ')[0] : '');
     const lastName = body.lastName || (body.name && body.name.split(' ').length > 1 ? body.name.split(' ').slice(1).join(' ') : '');
     const email = body.email || null;
     const phone = body.phone || null;
-    const nationality = body.country || body.nationality || 'United States';
-    const tier = body.tier || 'VIP Frequent';
+    const nationality = body.country || body.nationality || '';
+    const tier = body.tier || 'Standard';
     const totalSpent = typeof body.totalSpent === 'number'
       ? body.totalSpent
       : parseFloat(String(body.totalSpent || '0').replace(/[^0-9.]/g, '')) || 0;
     const status = body.status || 'Active';
 
-    // Store rich metadata
-    clientMetadataMap.set(clientId, { ...body, id: clientId, firstName, lastName, email, phone, nationality, tier, totalSpent, status });
+    // Store all custom entered fields in persistent metadata store
+    metadataStore[clientId] = {
+      id: clientId,
+      firstName,
+      lastName,
+      email,
+      phone,
+      city: body.city || '',
+      country: body.country || nationality || '',
+      nationality: body.nationality || nationality || '',
+      timezone: body.timezone || '',
+      preferredLanguage: body.preferredLanguage || '',
+      passportNumber: body.passportNumber || '',
+      passportExpiry: body.passportExpiry || '',
+      preferredCabinClass: body.preferredCabinClass || '',
+      seatPreference: body.seatPreference || '',
+      mealPreference: body.mealPreference || '',
+      tier,
+      totalSpent,
+      status,
+      createdAt: body.createdAt || now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+    saveMetadata(metadataStore);
 
     const clientRecord = {
       id: clientId,
@@ -404,8 +341,9 @@ router.put('/:id', async (req, res) => {
   const updates = req.body || {};
 
   try {
-    const existingMeta = clientMetadataMap.get(id) || {};
-    clientMetadataMap.set(id, { ...existingMeta, ...updates });
+    const existingMeta = metadataStore[id] || {};
+    metadataStore[id] = { ...existingMeta, ...updates };
+    saveMetadata(metadataStore);
 
     const updateData = {};
     if (updates.firstName !== undefined) updateData.firstName = updates.firstName;
@@ -487,7 +425,8 @@ router.delete('/:id', async (req, res) => {
       }
     }
 
-    clientMetadataMap.delete(id);
+    delete metadataStore[id];
+    saveMetadata(metadataStore);
     memoryClients = memoryClients.filter((c) => c.id !== id);
 
     const io = req.app.get('io');
