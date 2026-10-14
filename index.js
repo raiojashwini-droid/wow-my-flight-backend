@@ -19,9 +19,15 @@ const telnyxRoutes = require('./routes/telnyx');
 const traveloproRoutes = require('./routes/travelopro');
 const bookingRoutes = require('./routes/bookings');
 const webhookRoutes = require('./routes/webhooks');
-const leadRoutes = require('./routes/leads');
+const leadsRoutes = require('./routes/leads');
+const quotesRoutes = require('./routes/quotes');
+const clientsRoutes = require('./routes/clients');
+const paymentsRoutes = require('./routes/payments');
+const usersRoutes = require('./routes/users');
+const consultationsRoutes = require('./routes/consultations');
+const documentsRoutes = require('./routes/documents');
 const chatStore = require('./store/chatStore');
-const { isDbConnected } = require('./db');
+const { isDbConnected, checkConnection } = require('./db');
 
 const app = express();
 const server = http.createServer(app);
@@ -203,13 +209,14 @@ app.use(express.json());
 // ─────────────────────────────────────────────────────────────────────────────
 // Health Check
 // ─────────────────────────────────────────────────────────────────────────────
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+  const dbLive = await checkConnection();
   res.json({
     status: 'ok',
     service: 'WowMyFlight CRM Backend',
     timestamp: new Date().toISOString(),
     database: {
-      connected: isDbConnected(),
+      connected: dbLive,
       provider: 'PostgreSQL (Prisma)'
     },
     telnyx: {
@@ -239,7 +246,15 @@ app.use('/api/telnyx', telnyxRoutes);
 app.use('/api/travelopro', traveloproRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/webhooks', webhookRoutes);
-app.use('/api/leads', leadRoutes);
+app.use('/api/leads', leadsRoutes);
+app.use('/api/quotes', quotesRoutes);
+app.use('/api/clients', clientsRoutes);
+app.use('/api/payments', paymentsRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/agents', usersRoutes);
+app.use('/api/auth', usersRoutes);
+app.use('/api/consultations', consultationsRoutes);
+app.use('/api/documents', documentsRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 404 Handler

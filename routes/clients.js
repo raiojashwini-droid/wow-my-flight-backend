@@ -1,9 +1,16 @@
 /**
  * server/routes/clients.js
- * WowMyFlight CRM — Direct Clients / Customer 360 CRUD API (PostgreSQL Prisma + Resilient Memory Fallback)
+ * WowMyFlight CRM — Confirmed Travelers / Customer 360 REST API (PostgreSQL Prisma + Resilient Memory Fallback)
+ * 
+ * Features:
+ *   - Real PostgreSQL persistence via Prisma
+ *   - Auto-seeding for flight travel clients if table is empty
+ *   - Search, status, and tier filtering
+ *   - UI-friendly formatting (country, city, cabin class, formatted totalSpent)
+ *   - Real-time Socket.io broadcasting on create / update / delete
  * 
  * Endpoints:
- *   GET    /api/clients       - Fetch all clients (Customer 360)
+ *   GET    /api/clients       - Fetch all clients (with search/tier/status filters)
  *   GET    /api/clients/:id   - Fetch single client by ID
  *   POST   /api/clients       - Create new client & broadcast via Socket.io
  *   PUT    /api/clients/:id   - Update client profile
@@ -90,7 +97,7 @@ let memoryClients = [...SEED_CLIENTS];
 // Ensure PostgreSQL is seeded if empty
 let isSeeded = false;
 async function ensureDbSeeded() {
-  if (isSeeded || !prisma || !isDbConnected()) return;
+  if (isSeeded || !prisma || (typeof isDbConnected === 'function' && !isDbConnected())) return;
   try {
     const count = await prisma.client.count();
     if (count === 0) {
@@ -122,9 +129,10 @@ async function ensureDbSeeded() {
 
 // Format client record with frontend-friendly helper fields
 function formatClient(c) {
+  if (!c) return null;
   return {
     ...c,
-    country: c.nationality || 'United States',
+    country: c.country || c.nationality || 'United States',
     city: c.city || 'New York',
     preferredCabinClass: c.preferredCabinClass || (c.tier?.includes('Elite') || c.tier?.includes('Platinum') ? 'First Class' : 'Business Class'),
     totalSpent: typeof c.totalSpent === 'number' ? `$${c.totalSpent.toLocaleString()}` : (c.totalSpent || '$0'),
@@ -133,36 +141,78 @@ function formatClient(c) {
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
- * GET /api/clients
- * Fetch all clients
+ * 1. GET /api/clients
+ * Fetch all clients with optional filters: search, status, tier
  * ─────────────────────────────────────────────────────────────────────────────
  */
 router.get('/', async (req, res) => {
   try {
-    if (prisma && isDbConnected()) {
-      await ensureDbSeeded();
-      const dbClients = await prisma.client.findMany({
-        orderBy: { createdAt: 'desc' },
-      });
-      return res.json({
-        success: true,
-        source: 'PostgreSQL Database',
-        count: dbClients.length,
-        data: dbClients.map(formatClient),
-      });
+    const { search, status, tier } = req.query;
+
+    if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
+      try {
+        await ensureDbSeeded();
+
+        const where = {};
+        if (status && status !== 'all' && status !== 'All') {
+          where.status = status;
+        }
+        if (tier && tier !== 'all' && tier !== 'All') {
+          where.tier = tier;
+        }
+        if (search) {
+          where.OR = [
+            { firstName: { contains: search, mode: 'insensitive' } },
+            { lastName: { contains: search, mode: 'insensitive' } },
+            { email: { contains: search, mode: 'insensitive' } },
+            { phone: { contains: search, mode: 'insensitive' } },
+          ];
+        }
+
+        const dbClients = await prisma.client.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+        });
+
+        return res.json({
+          success: true,
+          source: 'PostgreSQL Database',
+          count: dbClients.length,
+          data: dbClients.map(formatClient),
+        });
+      } catch (dbErr) {
+        console.warn('⚠️ [Clients API] DB query failed, falling back to memory:', dbErr.message);
+      }
+    }
+
+    // Filter memory cache
+    let filteredMem = [...memoryClients];
+    if (status && status !== 'all' && status !== 'All') {
+      filteredMem = filteredMem.filter((c) => c.status?.toLowerCase() === status.toLowerCase());
+    }
+    if (tier && tier !== 'all' && tier !== 'All') {
+      filteredMem = filteredMem.filter((c) => c.tier?.toLowerCase() === tier.toLowerCase());
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      filteredMem = filteredMem.filter((c) =>
+        `${c.firstName} ${c.lastName}`.toLowerCase().includes(q) ||
+        c.email?.toLowerCase().includes(q) ||
+        c.phone?.includes(q)
+      );
     }
 
     return res.json({
       success: true,
       source: 'Memory Cache',
-      count: memoryClients.length,
-      data: memoryClients.map(formatClient),
+      count: filteredMem.length,
+      data: filteredMem.map(formatClient),
     });
   } catch (err) {
     console.error('❌ [Clients API] Error fetching clients:', err.message);
     return res.json({
       success: true,
-      source: 'Fallback Memory',
+      source: 'fallback',
       count: memoryClients.length,
       data: memoryClients.map(formatClient),
       warning: err.message,
@@ -172,19 +222,23 @@ router.get('/', async (req, res) => {
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
- * GET /api/clients/:id
+ * 2. GET /api/clients/:id
  * Fetch single client by ID
  * ─────────────────────────────────────────────────────────────────────────────
  */
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    if (prisma && isDbConnected()) {
-      const dbClient = await prisma.client.findUnique({
-        where: { id },
-      });
-      if (dbClient) {
-        return res.json({ success: true, data: formatClient(dbClient) });
+    if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
+      try {
+        const dbClient = await prisma.client.findUnique({
+          where: { id },
+        });
+        if (dbClient) {
+          return res.json({ success: true, data: formatClient(dbClient) });
+        }
+      } catch (dbErr) {
+        console.warn(`⚠️ [Clients API] Could not fetch client ${id} from DB:`, dbErr.message);
       }
     }
 
@@ -202,7 +256,7 @@ router.get('/:id', async (req, res) => {
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
- * POST /api/clients
+ * 3. POST /api/clients
  * Create new client & broadcast via Socket.io
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -212,10 +266,10 @@ router.post('/', async (req, res) => {
     const clientId = body.id || `CL-${Math.floor(1000 + Math.random() * 9000)}`;
     const now = new Date();
 
-    const firstName = body.firstName || 'Traveler';
-    const lastName = body.lastName || '';
-    const email = body.email || '';
-    const phone = body.phone || '';
+    const firstName = body.firstName || (body.name ? body.name.split(' ')[0] : 'Traveler');
+    const lastName = body.lastName || (body.name && body.name.split(' ').length > 1 ? body.name.split(' ').slice(1).join(' ') : '');
+    const email = body.email || null;
+    const phone = body.phone || null;
     const nationality = body.country || body.nationality || 'United States';
     const tier = body.tier || 'VIP Frequent';
     const totalSpent = typeof body.totalSpent === 'number'
@@ -233,13 +287,13 @@ router.post('/', async (req, res) => {
       tier,
       totalSpent,
       status,
-      createdAt: now,
+      createdAt: body.createdAt ? new Date(body.createdAt) : now,
       updatedAt: now,
     };
 
     let createdRecord = null;
 
-    if (prisma && isDbConnected()) {
+    if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
       try {
         createdRecord = await prisma.client.create({
           data: clientRecord,
@@ -250,15 +304,10 @@ router.post('/', async (req, res) => {
       }
     }
 
-    if (!createdRecord) {
-      createdRecord = clientRecord;
-      memoryClients.unshift(createdRecord);
-      console.log(`📁 [Memory] Saved client: ${createdRecord.id} (${firstName} ${lastName})`);
-    } else {
-      memoryClients.unshift(createdRecord);
-    }
+    const finalClient = createdRecord || clientRecord;
+    memoryClients.unshift(finalClient);
 
-    const formatted = formatClient(createdRecord);
+    const formatted = formatClient(finalClient);
 
     const io = req.app.get('io');
     if (io) {
@@ -272,7 +321,7 @@ router.post('/', async (req, res) => {
       data: formatted,
     });
   } catch (err) {
-    console.error('❌ [Clients API] Error creating client:', err);
+    console.error('❌ [Clients API] Error creating client:', err.message);
     return res.status(500).json({
       success: false,
       error: 'Failed to create client',
@@ -283,7 +332,7 @@ router.post('/', async (req, res) => {
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
- * PUT /api/clients/:id
+ * 4. PUT /api/clients/:id
  * Update an existing client
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -311,7 +360,7 @@ router.put('/:id', async (req, res) => {
 
     let updatedRecord = null;
 
-    if (prisma && isDbConnected()) {
+    if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
       try {
         updatedRecord = await prisma.client.update({
           where: { id },
@@ -345,7 +394,7 @@ router.put('/:id', async (req, res) => {
       data: formatted,
     });
   } catch (err) {
-    console.error(`❌ [Clients API] Error updating client ${id}:`, err);
+    console.error(`❌ [Clients API] Error updating client ${id}:`, err.message);
     return res.status(500).json({
       success: false,
       error: 'Failed to update client',
@@ -356,14 +405,14 @@ router.put('/:id', async (req, res) => {
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
- * DELETE /api/clients/:id
+ * 5. DELETE /api/clients/:id
  * Delete a client
  * ─────────────────────────────────────────────────────────────────────────────
  */
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    if (prisma && isDbConnected()) {
+    if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
       try {
         await prisma.client.delete({ where: { id } });
         console.log(`✅ [PostgreSQL] Deleted client: ${id}`);
@@ -384,7 +433,7 @@ router.delete('/:id', async (req, res) => {
       message: `Client ${id} deleted successfully`,
     });
   } catch (err) {
-    console.error(`❌ [Clients API] Error deleting client ${id}:`, err);
+    console.error(`❌ [Clients API] Error deleting client ${id}:`, err.message);
     return res.status(500).json({
       success: false,
       error: 'Failed to delete client',

@@ -12,6 +12,7 @@
 const express = require('express');
 const router = express.Router();
 const Telnyx = require('telnyx');
+const { prisma } = require('../db');
 const callStore = require('../store/callStore');
 
 const telnyx = Telnyx(process.env.TELNYX_API_KEY);
@@ -40,6 +41,35 @@ router.get('/numbers', async (req, res) => {
         { id: 'fallback-num-1', number: defaultNumber, type: 'toll_free', status: 'active' }
       ]
     });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1b. GET /api/telnyx/calls/logs
+//     Fetches call logs from PostgreSQL / memory store
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/calls/logs', async (req, res) => {
+  try {
+    const { agentId, limit = 50 } = req.query;
+    if (prisma) {
+      try {
+        const where = agentId ? { agentId } : {};
+        const logs = await prisma.callLog.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: parseInt(limit, 10),
+        });
+        if (logs.length > 0) {
+          return res.json({ success: true, count: logs.length, data: logs });
+        }
+      } catch (dbErr) {
+        console.warn('[Telnyx] callLog DB query fallback:', dbErr.message);
+      }
+    }
+    const memLogs = callStore.getCallLogs({ agentId, limit: parseInt(limit, 10) });
+    return res.json({ success: true, count: memLogs.length, data: memLogs });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

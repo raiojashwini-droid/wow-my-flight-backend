@@ -1,6 +1,6 @@
 /**
  * db.js
- * Centralized Prisma Database Client with auto-reconnection and graceful fallback
+ * Centralized Prisma Database Client with auto-reconnection and active health check
  */
 
 const { PrismaClient } = require('@prisma/client');
@@ -14,16 +14,21 @@ if (process.env.DATABASE_URL) {
       log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
     });
 
-    // Test connection asynchronously
-    prisma.$connect()
-      .then(() => {
+    const verifyConnection = async () => {
+      try {
+        await prisma.$queryRaw`SELECT 1`;
         isConnected = true;
         console.log('✅ [PostgreSQL] Connected successfully to database via Prisma');
-      })
-      .catch((err) => {
+      } catch (err) {
         isConnected = false;
-        console.warn('⚠️ [PostgreSQL] Database connection failed:', err.message);
-      });
+        console.warn('⚠️ [PostgreSQL] Database connection attempt failed:', err.message);
+      }
+    };
+
+    verifyConnection();
+
+    // Keep database connection warm every 60 seconds
+    setInterval(verifyConnection, 60000);
   } catch (e) {
     console.warn('⚠️ [PostgreSQL] Could not initialize Prisma client:', e.message);
   }
@@ -34,4 +39,15 @@ if (process.env.DATABASE_URL) {
 module.exports = {
   prisma,
   isDbConnected: () => isConnected,
+  checkConnection: async () => {
+    if (!prisma) return false;
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      isConnected = true;
+      return true;
+    } catch {
+      isConnected = false;
+      return false;
+    }
+  }
 };
