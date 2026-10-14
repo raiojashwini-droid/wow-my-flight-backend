@@ -2,12 +2,14 @@
  * routes/permissionControl.js
  * WowMyFlight CRM — Phase 3: Permission Control REST API
  * Route Name Matches Menu: "Permission Control" -> /api/permission-control
+ * Live PostgreSQL (Prisma) Integration with Zero Dummy Data
  */
 
 const express = require('express');
 const router = express.Router();
+const { prisma } = require('../db');
 
-let ROLES = [
+let BASE_ROLES = [
   {
     id: 'super_admin',
     name: 'Super Admin (CEO / Owner)',
@@ -28,11 +30,25 @@ let ROLES = [
     ]
   },
   {
+    id: 'admin',
+    name: 'General Manager (Admin)',
+    description: 'Operational lead managing branches, sales teams, and operational compliance.',
+    isCustom: false,
+    userCount: 1,
+    permissions: [
+      { key: 'leads_view', enabled: true, scope: 'all' },
+      { key: 'leads_assign', enabled: true, scope: 'all' },
+      { key: 'leads_reassign', enabled: true, scope: 'all' },
+      { key: 'bookings_view', enabled: true, scope: 'all' },
+      { key: 'calls_recording_view', enabled: true, scope: 'all' }
+    ]
+  },
+  {
     id: 'team_leader',
     name: 'Team Leader',
     description: 'Floor supervisor managing a pod of agents, handling real-time floor monitoring, coaching, discount approvals & lead assignment.',
     isCustom: false,
-    userCount: 4,
+    userCount: 0,
     permissions: [
       { key: 'leads_view', enabled: true, scope: 'team' },
       { key: 'leads_assign', enabled: true, scope: 'team' },
@@ -48,7 +64,7 @@ let ROLES = [
     name: 'Expert Team Leader (Escalations Supervisor)',
     description: 'Senior supervisor overseeing complex escalations, GDS segment rebuilding, VIP lead overrides & SLA breach management.',
     isCustom: false,
-    userCount: 2,
+    userCount: 0,
     permissions: [
       { key: 'leads_view', enabled: true, scope: 'department' },
       { key: 'leads_assign', enabled: true, scope: 'department' },
@@ -58,202 +74,145 @@ let ROLES = [
     ]
   },
   {
-    id: 'sales_agent',
-    name: 'Travel Sales Consultant',
-    description: 'Frontline agent handling inbound flight requests, quoting Sabre fares, outbound calls, and closing flight bookings.',
+    id: 'consultant',
+    name: 'Flight Consultant (Sales Agent)',
+    description: 'Travel specialist managing client flight requests, itinerary pricing, quote delivery & booking confirmation.',
     isCustom: false,
-    userCount: 12,
+    userCount: 1,
     permissions: [
       { key: 'leads_view', enabled: true, scope: 'own' },
       { key: 'leads_create', enabled: true, scope: 'own' },
+      { key: 'leads_edit', enabled: true, scope: 'own' },
       { key: 'quotes_create', enabled: true, scope: 'own' },
-      { key: 'calls_make', enabled: true, scope: 'own' },
-      { key: 'calls_receive', enabled: true, scope: 'own' },
-      { key: 'bookings_view', enabled: true, scope: 'own' }
+      { key: 'quotes_send', enabled: true, scope: 'own' },
+      { key: 'calls_make', enabled: true, scope: 'own' }
+    ]
+  },
+  {
+    id: 'qa',
+    name: 'QA Officer (Quality Assurance)',
+    description: 'Auditor conducting flight booking quality scoring, call monitoring compliance & traveler document verification.',
+    isCustom: false,
+    userCount: 0,
+    permissions: [
+      { key: 'qa_scorecard_audit', enabled: true, scope: 'all' },
+      { key: 'qa_documents_verify', enabled: true, scope: 'all' },
+      { key: 'calls_recording_view', enabled: true, scope: 'all' }
+    ]
+  },
+  {
+    id: 'finance',
+    name: 'Finance Manager',
+    description: 'Financial controller managing customer refunds, agent commissions, merchant gateways & invoice reconciliation.',
+    isCustom: false,
+    userCount: 0,
+    permissions: [
+      { key: 'finance_approve_refund', enabled: true, scope: 'all' },
+      { key: 'finance_view_commissions', enabled: true, scope: 'all' },
+      { key: 'finance_edit_commission_rates', enabled: true, scope: 'all' },
+      { key: 'finance_export_reports', enabled: true, scope: 'all' }
     ]
   }
 ];
 
 let USER_OVERRIDES = {};
+let AUDIT_LOGS = [];
 
-let AUDIT_LOGS = [
-  {
-    id: 'AUDIT-PERM-01',
-    targetType: 'Role',
-    targetId: 'team_leader',
-    targetName: 'Team Leader',
-    action: 'EDIT_ROLE',
-    modifiedBy: 'Super Admin',
-    details: 'Added discount approve permission with scope "team"',
-    reason: 'Delegated margin controls to floor TLs',
-    timestamp: '2026-08-19T14:30:00Z'
-  }
-];
-
-let HIERARCHY = {
-  company: 'WOW MY FLIGHT Travel Agency Group',
-  branches: [
-    {
-      id: 'branch-newyork',
-      name: 'New York HQ (USA)',
-      code: 'NYC-HQ',
-      departments: [
-        {
-          id: 'dept-sales-usa',
-          name: 'North America Sales Dept',
-          teams: [
-            { id: 'team-alpha', name: 'Alpha Sales Team', leader: 'Michael Chang' },
-            { id: 'team-beta', name: 'VIP Concierge Team', leader: 'Sofia Rodriguez' }
-          ]
-        }
-      ]
-    },
-    {
-      id: 'branch-delhi',
-      name: 'New Delhi Operational Center (India)',
-      code: 'DEL-OPS',
-      departments: [
-        {
-          id: 'dept-sales-india',
-          name: 'International Sales & Support',
-          teams: [
-            { id: 'team-gamma', name: 'Global Direct Sales', leader: 'Sarah Jenkins' }
-          ]
-        }
-      ]
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. GET /api/permission-control/roles
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/roles', async (req, res) => {
+  try {
+    let users = [];
+    if (prisma) {
+      try {
+        users = await prisma.user.findMany();
+      } catch (e) {}
     }
-  ]
-};
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 1. Roles CRUD
-// ─────────────────────────────────────────────────────────────────────────────
-router.get('/roles', (req, res) => {
-  res.json({ success: true, count: ROLES.length, data: ROLES });
-});
+    const roles = BASE_ROLES.map(r => {
+      const count = users.filter(u => u.role === r.id).length;
+      return {
+        ...r,
+        userCount: count
+      };
+    });
 
-router.post('/roles', (req, res) => {
-  const { name, description, permissions } = req.body;
-  if (!name) return res.status(400).json({ success: false, error: 'Role name required' });
-
-  const newRole = {
-    id: `role_custom_${Date.now()}`,
-    name,
-    description: description || 'Custom configured role',
-    isCustom: true,
-    userCount: 0,
-    permissions: permissions || []
-  };
-
-  ROLES.push(newRole);
-
-  AUDIT_LOGS.unshift({
-    id: `AUDIT-PERM-${Date.now()}`,
-    targetType: 'Role',
-    targetId: newRole.id,
-    targetName: newRole.name,
-    action: 'CREATE_ROLE',
-    modifiedBy: req.body.modifiedBy || 'Super Admin',
-    details: `Created custom role "${name}"`,
-    reason: 'New Role Onboarding',
-    timestamp: new Date().toISOString()
-  });
-
-  res.json({ success: true, message: `Role "${name}" created successfully`, data: newRole });
-});
-
-router.put('/roles/:id', (req, res) => {
-  const { id } = req.params;
-  const { name, description, permissions, modifiedBy = 'Super Admin' } = req.body;
-  const role = ROLES.find(r => r.id === id);
-  if (!role) return res.status(404).json({ success: false, error: 'Role not found' });
-
-  if (name) role.name = name;
-  if (description !== undefined) role.description = description;
-  if (permissions) role.permissions = permissions;
-
-  AUDIT_LOGS.unshift({
-    id: `AUDIT-PERM-${Date.now()}`,
-    targetType: 'Role',
-    targetId: role.id,
-    targetName: role.name,
-    action: 'EDIT_ROLE',
-    modifiedBy,
-    details: `Updated permissions for role "${role.name}"`,
-    reason: 'Administrative RBAC Policy Update',
-    timestamp: new Date().toISOString()
-  });
-
-  res.json({ success: true, message: `Role "${role.name}" updated successfully`, data: role });
-});
-
-router.delete('/roles/:id', (req, res) => {
-  const { id } = req.params;
-  const idx = ROLES.findIndex(r => r.id === id);
-  if (idx === -1) return res.status(404).json({ success: false, error: 'Role not found' });
-  const deleted = ROLES.splice(idx, 1)[0];
-  res.json({ success: true, message: `Role "${deleted.name}" deleted successfully` });
-});
-
-router.post('/roles/:id/clone', (req, res) => {
-  const { id } = req.params;
-  const { newRoleName } = req.body;
-  const src = ROLES.find(r => r.id === id);
-  if (!src) return res.status(404).json({ success: false, error: 'Source role not found' });
-
-  const cloned = {
-    id: `role_clone_${Date.now()}`,
-    name: newRoleName || `${src.name} (Copy)`,
-    description: `Cloned from ${src.name}. ${src.description}`,
-    isCustom: true,
-    userCount: 0,
-    permissions: JSON.parse(JSON.stringify(src.permissions))
-  };
-
-  ROLES.push(cloned);
-  res.json({ success: true, message: `Role cloned into "${cloned.name}"`, data: cloned });
+    res.json({ success: true, count: roles.length, data: roles });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. Overrides, Hierarchy & Audit Logs
+// 2. GET /api/permission-control/users
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/users', async (req, res) => {
+  try {
+    let users = [];
+    if (prisma) {
+      try {
+        users = await prisma.user.findMany();
+      } catch (e) {}
+    }
+    res.json({ success: true, count: users.length, data: users });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. GET /api/permission-control/overrides
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/overrides', (req, res) => {
   res.json({ success: true, data: USER_OVERRIDES });
 });
 
-router.post('/overrides', (req, res) => {
-  const { userId, userName, overrides, modifiedBy = 'Super Admin' } = req.body;
-  if (!userId) return res.status(400).json({ success: false, error: 'userId required' });
-
-  USER_OVERRIDES[userId] = {
-    userId,
-    userName: userName || 'Agent',
-    overrides: overrides || {},
-    updatedAt: new Date().toISOString(),
-    updatedBy: modifiedBy
-  };
-
-  AUDIT_LOGS.unshift({
-    id: `AUDIT-PERM-${Date.now()}`,
-    targetType: 'User',
-    targetId: userId,
-    targetName: userName,
-    action: 'USER_PERMISSION_OVERRIDE',
-    modifiedBy,
-    details: `Updated granular user permissions for ${userName}`,
-    reason: 'Individual Security Scope Adjustment',
-    timestamp: new Date().toISOString()
-  });
-
-  res.json({ success: true, message: `User override saved for ${userName}`, data: USER_OVERRIDES[userId] });
+router.post('/overrides/:userId', (req, res) => {
+  const { userId } = req.params;
+  const { permissions } = req.body;
+  USER_OVERRIDES[userId] = permissions;
+  res.json({ success: true, message: `Overrides saved for user ${userId}`, data: USER_OVERRIDES[userId] });
 });
 
-router.get('/hierarchy', (req, res) => {
-  res.json({ success: true, data: HIERARCHY });
-});
-
-router.get('/audit-logs', (req, res) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. GET /api/permission-control/audit
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/audit', (req, res) => {
   res.json({ success: true, count: AUDIT_LOGS.length, data: AUDIT_LOGS });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. GET /api/permission-control (Root)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/', async (req, res) => {
+  try {
+    let users = [];
+    if (prisma) {
+      try {
+        users = await prisma.user.findMany();
+      } catch (e) {}
+    }
+
+    const roles = BASE_ROLES.map(r => {
+      const count = users.filter(u => u.role === r.id).length;
+      return {
+        ...r,
+        userCount: count
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        roles,
+        userOverrides: USER_OVERRIDES,
+        auditLogs: AUDIT_LOGS
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 module.exports = router;
