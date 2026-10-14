@@ -26,6 +26,15 @@ const paymentsRoutes = require('./routes/payments');
 const usersRoutes = require('./routes/users');
 const consultationsRoutes = require('./routes/consultations');
 const documentsRoutes = require('./routes/documents');
+// Phase 3 — Management Routes (API names matching sidebar menu names)
+const teamLeaderDashboardRoutes = require('./routes/teamLeaderDashboard');
+const qaRoutes = require('./routes/qa');
+const slaManagementRoutes = require('./routes/slaManagement');
+const automationRoutes = require('./routes/automation');
+const financeRoutes = require('./routes/finance');
+const managementReportsRoutes = require('./routes/managementReports');
+const permissionControlRoutes = require('./routes/permissionControl');
+const auditTrailRoutes = require('./routes/auditTrail');
 const chatStore = require('./store/chatStore');
 const { isDbConnected, checkConnection } = require('./db');
 
@@ -255,6 +264,18 @@ app.use('/api/agents', usersRoutes);
 app.use('/api/auth', usersRoutes);
 app.use('/api/consultations', consultationsRoutes);
 app.use('/api/documents', documentsRoutes);
+
+// Phase 3 — Management API Routes (Exact match to sidebar menu names)
+app.use('/api/team-leader-dashboard', teamLeaderDashboardRoutes);
+app.use('/api/team_leader_dashboard', teamLeaderDashboardRoutes);
+app.use('/api/qa', qaRoutes);
+app.use('/api/sla-management', slaManagementRoutes);
+app.use('/api/automation', automationRoutes);
+app.use('/api/finance', financeRoutes);
+app.use('/api/management-reports', managementReportsRoutes);
+app.use('/api/permission-control', permissionControlRoutes);
+app.use('/api/permission-management', permissionControlRoutes);
+app.use('/api/audit-trail', auditTrailRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 404 Handler
