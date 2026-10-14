@@ -1,0 +1,29 @@
+{
+  "c887b0d3-d4e9-4b37-88a7-f08c2dc9a06f": {
+    "id": "c887b0d3-d4e9-4b37-88a7-f08c2dc9a06f",
+    "country": "UK",
+    "city": "abc",
+    "timezone": "UTC-06:00 Eastern Time",
+    "returnDate": "2026-10-21",
+    "flexibility": "±3 days",
+    "adults": 1,
+    "children": 0,
+    "infants": 0,
+    "cabinClass": "Business",
+    "budget": "$1,000 - $2,500",
+    "source": "Website Direct",
+    "priority": "High",
+    "labels": [
+      "VIP"
+    ],
+    "notes": "srtyuiop[ tyuio",
+    "activities": [
+      {
+        "time": "4:20:29 PM",
+        "agent": "Wael Madi (CEO)",
+        "status": "New Lead Created",
+        "comments": "Flight request for DXB → JFK (Business)"
+      }
+    ]
+  }
+}
