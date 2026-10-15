@@ -60,21 +60,21 @@ function formatLead(lead) {
     meta = values.find(m => (m.email && lead.email && m.email.toLowerCase() === lead.email.toLowerCase()) || (m.phone && lead.phone && m.phone === lead.phone)) || {};
   }
 
-  const country = meta.country || lead.country || lead.nationality || '';
-  const city = meta.city || lead.city || '';
-  const timezone = meta.timezone || lead.timezone || '';
-  const returnDate = meta.returnDate || lead.returnDate || '';
-  const flexibility = meta.flexibility || lead.flexibility || 'Exact Dates';
-  const adults = Number(meta.adults) || Number(lead.adults) || Number(lead.passengers) || 1;
-  const children = Number(meta.children) || Number(lead.children) || 0;
-  const infants = Number(meta.infants) || Number(lead.infants) || 0;
-  const budget = meta.budget || (lead.budget !== null && lead.budget !== undefined ? (String(lead.budget).startsWith('$') ? String(lead.budget) : `$${lead.budget}`) : '');
-  const source = meta.source || lead.source || '';
-  const priority = meta.priority || lead.priority || 'Medium';
-  const labels = Array.isArray(meta.labels) ? meta.labels : (Array.isArray(lead.labels) ? lead.labels : []);
+  const country = lead.country || meta.country || lead.nationality || '';
+  const city = lead.city || meta.city || '';
+  const timezone = lead.timezone || meta.timezone || '';
+  const returnDate = lead.returnDate || meta.returnDate || '';
+  const flexibility = lead.flexibility || meta.flexibility || 'Exact Dates';
+  const adults = Number(lead.adults) || Number(meta.adults) || Number(lead.passengers) || 1;
+  const children = Number(lead.children) || Number(meta.children) || 0;
+  const infants = Number(lead.infants) || Number(meta.infants) || 0;
+  const budget = lead.budgetRange || meta.budget || (lead.budget !== null && lead.budget !== undefined ? (String(lead.budget).startsWith('$') ? String(lead.budget) : `$${lead.budget}`) : '');
+  const source = lead.source || meta.source || 'Website Direct';
+  const priority = lead.priority || meta.priority || 'Medium';
+  const labels = (Array.isArray(lead.labels) && lead.labels.length > 0) ? lead.labels : (Array.isArray(meta.labels) ? meta.labels : []);
   const notes = lead.notes || meta.notes || '';
   const activities = Array.isArray(meta.activities) && meta.activities.length > 0 ? meta.activities : (Array.isArray(lead.activities) ? lead.activities : []);
-  const cabinClass = meta.cabinClass || lead.cabinClass || (lead.serviceId ? lead.serviceId.charAt(0).toUpperCase() + lead.serviceId.slice(1) : 'Economy');
+  const cabinClass = lead.cabinClass || meta.cabinClass || (lead.serviceId ? lead.serviceId.charAt(0).toUpperCase() + lead.serviceId.slice(1) : 'Economy');
 
   return {
     ...lead,
@@ -90,6 +90,7 @@ function formatLead(lead) {
     infants,
     passengers: adults + children + infants,
     budget,
+    budgetRange: budget,
     source,
     priority,
     labels,
@@ -713,21 +714,48 @@ router.post('/', async (req, res) => {
     const notes = body.notes || (origin && destination ? `Inquiry created in CRM for ${origin} → ${destination} (${passengers} pax)` : null);
     const assignedAgentId = body.assignedAgentId || null;
 
+    const country = body.country || body.nationality || null;
+    const city = body.city || null;
+    const timezone = body.timezone || null;
+    const returnDate = body.returnDate || null;
+    const flexibility = body.flexibility || 'Exact Dates';
+    const adults = parseInt(body.adults || body.passengers, 10) || 1;
+    const children = parseInt(body.children, 10) || 0;
+    const infants = parseInt(body.infants, 10) || 0;
+    const cabinClass = body.cabinClass || (serviceId ? serviceId.charAt(0).toUpperCase() + serviceId.slice(1) : 'Economy');
+    const budgetRange = body.budget ? String(body.budget) : null;
+    const source = body.source || 'Website Direct';
+    const priority = body.priority || 'Medium';
+    const labels = Array.isArray(body.labels) ? body.labels : [];
+
     const newLeadData = {
       id: leadId,
       firstName,
       lastName,
       email,
       phone,
-      nationality,
+      country,
+      city,
+      timezone,
+      nationality: country,
       preferredLanguage,
       serviceId,
+      cabinClass,
       status,
       origin,
       destination,
       travelDate,
+      returnDate,
+      flexibility,
+      adults,
+      children,
+      infants,
       passengers,
       budget,
+      budgetRange,
+      source,
+      priority,
+      labels,
       notes,
       assignedAgentId,
       createdAt: body.createdAt ? new Date(body.createdAt) : now,
@@ -913,8 +941,11 @@ router.put('/:id', async (req, res) => {
       try {
         const allowedPrismaFields = [
           'firstName', 'lastName', 'email', 'phone', 'nationality',
+          'country', 'city', 'timezone', 'cabinClass', 'returnDate', 'flexibility',
+          'adults', 'children', 'infants', 'passengers', 'budget', 'budgetRange',
+          'source', 'priority', 'labels',
           'preferredLanguage', 'serviceId', 'status', 'origin', 'destination',
-          'travelDate', 'passengers', 'budget', 'notes', 'assignedAgentId'
+          'travelDate', 'notes', 'assignedAgentId'
         ];
         const prismaData = {};
         for (const key of allowedPrismaFields) {
