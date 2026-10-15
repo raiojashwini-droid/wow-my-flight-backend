@@ -646,6 +646,16 @@ router.post('/dispositions', async (req, res) => {
       try { logs = JSON.parse(fs.readFileSync(DISPOSITION_FILE, 'utf8')); } catch (e) { }
     }
 
+    const now = new Date();
+    const formattedTimestamp = now.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+
     const newLog = {
       id: `LOG-${Math.floor(100 + Math.random() * 900)}`,
       customer: customer || 'Customer',
@@ -653,7 +663,8 @@ router.post('/dispositions', async (req, res) => {
       agent: agent || 'Sales Agent',
       disposition,
       notes: notes || '',
-      time: 'Just now',
+      createdAt: now.toISOString(),
+      time: formattedTimestamp,
       actionTaken: actionTaken || `Updated Status to ${disposition}`,
       callbackDateTime: callbackDateTime || null,
       bookingValue: bookingValue ? Number(bookingValue) : null
