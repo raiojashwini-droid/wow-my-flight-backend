@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "id": "LOG-718",
+    "customer": "Outbound Customer",
+    "phone": "+916261508179",
+    "agent": "Wael Madi (CEO)",
+    "disposition": "Interested",
+    "notes": "sdfg yuiop;ol agrgf",
+    "time": "Just now",
+    "actionTaken": "Update Lead status to Contacted and create follow-up reminder."
+  }
+]

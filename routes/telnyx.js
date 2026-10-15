@@ -636,7 +636,7 @@ router.get('/dispositions', (req, res) => {
 
 router.post('/dispositions', async (req, res) => {
   try {
-    const { customer, phone, agent, disposition, notes, actionTaken } = req.body;
+    const { customer, phone, agent, disposition, notes, actionTaken, callbackDateTime, bookingValue } = req.body;
     if (!disposition) {
       return res.status(400).json({ success: false, error: 'disposition is required' });
     }
@@ -654,7 +654,9 @@ router.post('/dispositions', async (req, res) => {
       disposition,
       notes: notes || '',
       time: 'Just now',
-      actionTaken: actionTaken || `Updated Status to ${disposition}`
+      actionTaken: actionTaken || `Updated Status to ${disposition}`,
+      callbackDateTime: callbackDateTime || null,
+      bookingValue: bookingValue ? Number(bookingValue) : null
     };
 
     logs.unshift(newLog);
