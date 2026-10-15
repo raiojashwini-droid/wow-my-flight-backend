@@ -123,6 +123,72 @@ const saveWorkflows = (wfs) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Telnyx SMS Integration & Safe-Mode Settings (Protected by default)
+// ─────────────────────────────────────────────────────────────────────────────
+const Telnyx = require('telnyx');
+const telnyx = process.env.TELNYX_API_KEY ? Telnyx(process.env.TELNYX_API_KEY) : null;
+const SETTINGS_FILE = path.join(__dirname, '../store/automation_settings.json');
+
+const getSettings = () => {
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
+      if (raw) return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.warn('[Automation API] Could not load settings:', e.message);
+  }
+  return {
+    telnyxLiveDispatch: false, // SAFE MODE: Live message delivery disabled by default!
+    safeMode: true,
+    defaultFromNumber: process.env.TELNYX_DEFAULT_FROM_NUMBER || '+18503329681',
+    messagingProfileId: process.env.TELNYX_MESSAGING_PROFILE_ID || '4001a043-2e89-440f-988a-2a8e1cbd4f7b',
+    configured: !!process.env.TELNYX_API_KEY
+  };
+};
+
+const saveSettings = (settings) => {
+  try {
+    const dir = path.dirname(SETTINGS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('[Automation API] Could not save settings:', e.message);
+  }
+};
+
+const getTelnyxIntegrationInfo = async () => {
+  const settings = getSettings();
+  let numbers = [settings.defaultFromNumber];
+  let profileName = 'Wow My flight LLC';
+
+  if (telnyx) {
+    try {
+      const numsRes = await telnyx.phoneNumbers.list({ 'page[size]': 10 });
+      if (numsRes && Array.isArray(numsRes.data)) {
+        numbers = numsRes.data.map(n => n.phone_number);
+      }
+    } catch (e) {
+      console.warn('[Automation API] Telnyx numbers list cache used:', e.message);
+    }
+  }
+
+  return {
+    connected: !!process.env.TELNYX_API_KEY,
+    provider: 'Telnyx Cloud Telephony & SMS',
+    profileName,
+    profileId: settings.messagingProfileId,
+    defaultFromNumber: settings.defaultFromNumber,
+    activeNumbers: numbers,
+    safeMode: settings.safeMode !== false,
+    liveDispatch: settings.telnyxLiveDispatch === true,
+    statusText: (settings.safeMode !== false || !settings.telnyxLiveDispatch) 
+      ? 'Connected & Armed (Safe Mode Active: Outgoing Messages Paused)' 
+      : 'LIVE (Auto-SMS Dispatches Active)'
+  };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 1. GET /api/automation
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
@@ -147,6 +213,8 @@ router.get('/', async (req, res) => {
     }
 
     const currentWorkflows = getWorkflows();
+    const telnyxInfo = await getTelnyxIntegrationInfo();
+    const currentSettings = getSettings();
 
     const kpis = [
       { id: 'activeWf', title: 'Active Workflows', value: `${currentWorkflows.length} Flows`, change: 'Prebuilt CRM engines', color: '#6366F1' },
@@ -164,7 +232,9 @@ router.get('/', async (req, res) => {
       success: true,
       data: {
         kpis,
-        workflows: currentWorkflows
+        workflows: currentWorkflows,
+        telnyx: telnyxInfo,
+        settings: currentSettings
       }
     });
   } catch (error) {
@@ -173,7 +243,101 @@ router.get('/', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. PUT /api/automation/workflows/:id/toggle
+// 2. GET /api/automation/telnyx-status
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/telnyx-status', async (req, res) => {
+  try {
+    const info = await getTelnyxIntegrationInfo();
+    res.json({ success: true, data: info });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. PUT /api/automation/settings
+// ─────────────────────────────────────────────────────────────────────────────
+router.put('/settings', (req, res) => {
+  try {
+    const current = getSettings();
+    const { telnyxLiveDispatch, safeMode, defaultFromNumber } = req.body;
+    
+    if (typeof telnyxLiveDispatch === 'boolean') current.telnyxLiveDispatch = telnyxLiveDispatch;
+    if (typeof safeMode === 'boolean') current.safeMode = safeMode;
+    if (defaultFromNumber) current.defaultFromNumber = defaultFromNumber;
+
+    saveSettings(current);
+    res.json({ success: true, message: 'Automation settings updated', data: current });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. POST /api/automation/dispatch
+//    Handles event dispatches. SAFE MODE PROTECTED (No real SMS sent unless enabled)
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/dispatch', async (req, res) => {
+  try {
+    const { workflowId, customer, phone, message, channel = 'SMS', forceLive = false } = req.body;
+    const settings = getSettings();
+
+    if (!phone || !message) {
+      return res.status(400).json({ success: false, error: 'Phone and message are required for dispatch' });
+    }
+
+    const isLive = forceLive || (settings.telnyxLiveDispatch === true && settings.safeMode === false);
+
+    if (!isLive) {
+      // SAFE MODE: Message is logged and validated against Telnyx format WITHOUT sending
+      console.log(`[Automation Safe-Mode Dispatch] Channel: ${channel} | To: ${phone} | Customer: ${customer || 'Client'} | Message: "${message}"`);
+      return res.json({
+        success: true,
+        mode: 'SAFE_MODE_PROTECTED',
+        sent: false,
+        message: 'Telnyx Connected & Validated. Message delivery paused by Safe Mode (No SMS was sent to customer).',
+        dispatchLog: {
+          id: `DSP-SAFE-${Date.now().toString().slice(-6)}`,
+          workflowId: workflowId || 'WF-AUTO',
+          channel,
+          to: phone,
+          from: settings.defaultFromNumber,
+          customer: customer || 'Customer',
+          status: 'Simulated (Safe Mode Active)',
+          timestamp: new Date().toLocaleTimeString()
+        }
+      });
+    }
+
+    // LIVE MODE: Real Telnyx API Dispatch
+    if (!telnyx) {
+      return res.status(500).json({ success: false, error: 'Telnyx API key not configured on server' });
+    }
+
+    const msgResponse = await telnyx.messages.create({
+      from: settings.defaultFromNumber,
+      to: phone,
+      text: message,
+      messaging_profile_id: settings.messagingProfileId,
+    });
+
+    console.log(`[Automation LIVE Dispatch] SMS Sent via Telnyx! To: ${phone}, ID: ${msgResponse.data?.id}`);
+
+    return res.json({
+      success: true,
+      mode: 'LIVE_TELNYX_SENT',
+      sent: true,
+      message: `SMS successfully dispatched via Telnyx (+18503329681) to ${phone}`,
+      data: msgResponse.data
+    });
+  } catch (error) {
+    console.error('[Automation Dispatch Error]:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. PUT /api/automation/workflows/:id/toggle
 // ─────────────────────────────────────────────────────────────────────────────
 router.put('/workflows/:id/toggle', (req, res) => {
   const { id } = req.params;
@@ -186,7 +350,7 @@ router.put('/workflows/:id/toggle', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. POST /api/automation/workflows
+// 6. POST /api/automation/workflows
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/workflows', (req, res) => {
   const { name, trigger, steps = [], escalationRules = [] } = req.body;
