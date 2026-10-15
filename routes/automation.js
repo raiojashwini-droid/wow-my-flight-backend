@@ -7,9 +7,13 @@
 
 const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const path = require('path');
 const { prisma } = require('../db');
 
-let WORKFLOWS = [
+const WORKFLOWS_FILE = path.join(__dirname, '../store/automation_workflows.json');
+
+const DEFAULT_WORKFLOWS = [
   {
     id: 'WF-EX-1',
     name: 'Workflow 1 – New Lead SLA Escalation Engine',
@@ -95,6 +99,29 @@ let WORKFLOWS = [
   }
 ];
 
+const getWorkflows = () => {
+  try {
+    if (fs.existsSync(WORKFLOWS_FILE)) {
+      const raw = fs.readFileSync(WORKFLOWS_FILE, 'utf8');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('[Automation API] Could not load workflows from file:', e.message);
+  }
+  return DEFAULT_WORKFLOWS;
+};
+
+const saveWorkflows = (wfs) => {
+  try {
+    fs.writeFileSync(WORKFLOWS_FILE, JSON.stringify(wfs, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('[Automation API] Could not save workflows to file:', e.message);
+  }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. GET /api/automation
 // ─────────────────────────────────────────────────────────────────────────────
@@ -119,8 +146,10 @@ router.get('/', async (req, res) => {
       }
     }
 
+    const currentWorkflows = getWorkflows();
+
     const kpis = [
-      { id: 'activeWf', title: 'Active Workflows', value: `${WORKFLOWS.length} Flows`, change: 'Prebuilt CRM engines', color: '#6366F1' },
+      { id: 'activeWf', title: 'Active Workflows', value: `${currentWorkflows.length} Flows`, change: 'Prebuilt CRM engines', color: '#6366F1' },
       { id: 'triggeredToday', title: 'Triggered Today', value: `${bookingsCount} Runs`, change: 'Live execution events', color: '#2563EB' },
       { id: 'pendingAuto', title: 'Pending Automations', value: '0 Runs', change: 'Queue clear', color: '#0284C7' },
       { id: 'failedAuto', title: 'Failed Automations', value: '0 Runs', change: 'Zero errors', color: '#EF4444' },
@@ -135,7 +164,7 @@ router.get('/', async (req, res) => {
       success: true,
       data: {
         kpis,
-        workflows: WORKFLOWS
+        workflows: currentWorkflows
       }
     });
   } catch (error) {
@@ -148,9 +177,11 @@ router.get('/', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.put('/workflows/:id/toggle', (req, res) => {
   const { id } = req.params;
-  const wf = WORKFLOWS.find(w => w.id === id);
+  const currentWorkflows = getWorkflows();
+  const wf = currentWorkflows.find(w => w.id === id);
   if (!wf) return res.status(404).json({ success: false, error: 'Workflow not found' });
   wf.status = !wf.status;
+  saveWorkflows(currentWorkflows);
   res.json({ success: true, message: `Workflow ${wf.name} is now ${wf.status ? 'ENABLED' : 'DISABLED'}`, data: wf });
 });
 
@@ -159,6 +190,7 @@ router.put('/workflows/:id/toggle', (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/workflows', (req, res) => {
   const { name, trigger, steps = [], escalationRules = [] } = req.body;
+  const currentWorkflows = getWorkflows();
   const newWf = {
     id: `WF-USR-${Date.now()}`,
     name: name || 'Custom Automation Workflow',
@@ -167,7 +199,8 @@ router.post('/workflows', (req, res) => {
     steps,
     escalationRules
   };
-  WORKFLOWS.push(newWf);
+  currentWorkflows.push(newWf);
+  saveWorkflows(currentWorkflows);
   res.json({ success: true, message: 'Workflow created successfully', data: newWf });
 });
 
