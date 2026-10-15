@@ -1,42 +1,57 @@
 {
-  "c887b0d3-d4e9-4b37-88a7-f08c2dc9a06f": {
-    "id": "c887b0d3-d4e9-4b37-88a7-f08c2dc9a06f",
-    "country": "UK",
-    "city": "abc",
-    "timezone": "UTC-06:00 Eastern Time",
-    "returnDate": "2026-10-21",
+  "8449763c-f18c-4905-98c9-fa621c6dc06d": {
+    "id": "8449763c-f18c-4905-98c9-fa621c6dc06d",
+    "country": "USA",
+    "city": "New York",
+    "timezone": "UTC-09:00 Eastern Time",
+    "returnDate": "2026-10-20",
+    "flexibility": "±7 days",
+    "adults": 1,
+    "children": 0,
+    "infants": 0,
+    "cabinClass": "Premium Economy",
+    "budget": "$500 - $1,000",
+    "source": "Website Direct",
+    "priority": "High",
+    "labels": [
+      "Corporate"
+    ],
+    "notes": "abc hbdjj nbuikj ik",
+    "activities": [
+      {
+        "time": "4:29:54 PM",
+        "agent": "Wael Madi (CEO)",
+        "status": "New Lead Created",
+        "comments": "Flight request for BOM → LHR (Premium Economy)"
+      }
+    ]
+  },
+  "85d97279-665e-4096-8e23-9ed4ac120771": {
+    "id": "85d97279-665e-4096-8e23-9ed4ac120771",
+    "country": "India",
+    "city": "High-tech",
+    "timezone": "UTC-11:00 Eastern Time",
+    "returnDate": "2026-10-20",
     "flexibility": "±3 days",
     "adults": 1,
     "children": 0,
     "infants": 0,
-    "cabinClass": "Business",
+    "cabinClass": "First Class",
     "budget": "$1,000 - $2,500",
-    "source": "Website Direct",
-    "priority": "High",
+    "source": "Google Ads",
+    "priority": "Low",
     "labels": [
-      "VIP"
+      "Corporate",
+      "Urgent"
     ],
-    "notes": "srtyuiop[ tyuio",
+    "notes": "ghad hdi jni xia nn skj",
     "activities": [
       {
-        "time": "4:20:29 PM",
+        "time": "4:33:19 PM",
         "agent": "Wael Madi (CEO)",
         "status": "New Lead Created",
-        "comments": "Flight request for DXB → JFK (Business)"
+        "comments": "Flight request for SYD → DEL (First Class)"
       }
-    ],
-    "lifecycleHistory": [
-      {
-        "from": "QUOTE SENT",
-        "to": "NEGOTIATION",
-        "user": "Wael Madi (CEO)",
-        "role": "Super Admin",
-        "time": "12:17 am",
-        "duration": "Just now",
-        "sla": "Met",
-        "reason": "Customer requested 5% discount"
-      }
-    ],
-    "status": "NEGOTIATION"
+    ]
   }
 }
