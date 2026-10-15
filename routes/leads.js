@@ -778,6 +778,77 @@ router.post('/', async (req, res) => {
       }
     }
 
+    // Auto-sync: Create/upsert passenger into Customer 360 (clients)
+    try {
+      const clientsMetaFile = path.join(__dirname, '../store/clients_metadata.json');
+      let clientsMeta = {};
+      try {
+        if (fs.existsSync(clientsMetaFile)) {
+          clientsMeta = JSON.parse(fs.readFileSync(clientsMetaFile, 'utf8'));
+        }
+      } catch (e) {}
+
+      const clientGenId = `CL-${Math.floor(1000 + Math.random() * 9000)}`;
+      const clientEmail = email || '';
+      const clientPhone = phone || '';
+
+      // Check if client already exists
+      const existingKey = Object.keys(clientsMeta).find(k => {
+        const m = clientsMeta[k];
+        return (clientEmail && m.email && m.email.toLowerCase() === clientEmail.toLowerCase()) ||
+               (clientPhone && m.phone && m.phone === clientPhone);
+      });
+
+      const targetClientId = existingKey || clientGenId;
+      const clientMetaRecord = {
+        id: targetClientId,
+        firstName,
+        lastName,
+        email: clientEmail,
+        phone: clientPhone,
+        city: body.city || '',
+        country: nationality || '',
+        nationality: nationality || '',
+        preferredCabinClass: body.cabinClass || (serviceId ? serviceId.charAt(0).toUpperCase() + serviceId.slice(1) : 'Economy'),
+        tier: 'Standard',
+        totalSpent: 0,
+        status: 'Active',
+        createdAt: body.createdAt || now.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+
+      clientsMeta[targetClientId] = clientMetaRecord;
+      try {
+        const dir = path.dirname(clientsMetaFile);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(clientsMetaFile, JSON.stringify(clientsMeta, null, 2), 'utf8');
+      } catch (e) {}
+
+      if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
+        try {
+          await prisma.client.upsert({
+            where: { id: targetClientId },
+            update: { firstName, lastName, email: clientEmail, phone: clientPhone, nationality },
+            create: {
+              id: targetClientId,
+              firstName,
+              lastName,
+              email: clientEmail,
+              phone: clientPhone,
+              nationality,
+              tier: 'Standard',
+              totalSpent: 0,
+              status: 'Active'
+            }
+          });
+        } catch (e) {
+          console.warn('⚠️ [Leads API] Auto-sync client to DB warning:', e.message);
+        }
+      }
+    } catch (syncErr) {
+      console.warn('⚠️ [Leads API] Auto-sync to Customer 360 warning:', syncErr.message);
+    }
+
     const finalLead = savedDbLead || newLeadData;
     const enrichedLead = formatLead(finalLead);
 
