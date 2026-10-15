@@ -1,5 +1,15 @@
 [
   {
+    "id": "LOG-460",
+    "leadId": "LD-8440",
+    "prevAgent": "Sarah Jenkins",
+    "newAgent": "Alex Turner (GM)",
+    "method": "Manual Reassignment",
+    "assignedBy": "Team Leader",
+    "time": "2026-10-14 18:37",
+    "reason": "Load balancing test"
+  },
+  {
     "id": "LOG-991",
     "leadId": "LD-8440",
     "prevAgent": "Unassigned",

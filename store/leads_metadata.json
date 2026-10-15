@@ -24,6 +24,19 @@
         "status": "New Lead Created",
         "comments": "Flight request for DXB → JFK (Business)"
       }
-    ]
+    ],
+    "lifecycleHistory": [
+      {
+        "from": "QUOTE SENT",
+        "to": "NEGOTIATION",
+        "user": "Wael Madi (CEO)",
+        "role": "Super Admin",
+        "time": "12:17 am",
+        "duration": "Just now",
+        "sla": "Met",
+        "reason": "Customer requested 5% discount"
+      }
+    ],
+    "status": "NEGOTIATION"
   }
 }

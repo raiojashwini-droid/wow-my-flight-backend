@@ -320,6 +320,22 @@ router.put('/distribution/rules/:id', (req, res) => {
   return res.status(404).json({ success: false, error: 'Rule not found' });
 });
 
+router.post('/distribution/rules', (req, res) => {
+  const rules = readJsonFile(RULES_FILE, []);
+  const newRule = {
+    id: rules.length > 0 ? Math.max(...rules.map(r => r.id || 0)) + 1 : 1,
+    name: req.body.name || 'Custom Routing Rule',
+    priority: Number(req.body.priority) || rules.length + 1,
+    type: req.body.type || 'Skill-Based',
+    condition: req.body.condition || 'Fallback Default',
+    action: req.body.action || 'Assign to Available Sales Agent',
+    enabled: req.body.enabled !== false
+  };
+  rules.push(newRule);
+  writeJsonFile(RULES_FILE, rules);
+  return res.status(201).json({ success: true, data: newRule });
+});
+
 router.post('/distribution/reassign', async (req, res) => {
   try {
     const { leadId, targetAgent, reason } = req.body;
@@ -407,7 +423,7 @@ router.get('/duplicates/detect', async (req, res) => {
 
         if (score > 0) {
           duplicates.push({
-            id: `DUP-${a.id}-${b.id}`,
+            id: `DUP-${a.id.slice(0, 8)}-${b.id.slice(0, 8)}`,
             pairKey,
             confidenceScore: score,
             confidenceBadge: score === 100 ? 'High Match (100%)' : score >= 90 ? `High Match (${score}%)` : `Probable Match (${score}%)`,
@@ -420,33 +436,21 @@ router.get('/duplicates/detect', async (req, res) => {
       }
     }
 
-    if (duplicates.length === 0 && leads.length > 0) {
-      const first = leads[0];
-      duplicates.push({
-        id: `DUP-DEMO-${first.id}`,
-        pairKey: `demo_${first.id}`,
-        confidenceScore: 95,
-        confidenceBadge: 'High Match (95%)',
-        badgeColor: '#059669',
-        matchReason: `Exact Match: Same Phone (${first.phone || '+1 555-234-8901'})`,
-        existingLead: first,
-        incomingLead: {
-          id: 'LD-99121',
-          firstName: first.firstName || 'Ambassador Harold',
-          lastName: first.lastName || 'Vance',
-          email: first.email ? `alt.${first.email}` : 'harold.vance@embassy.gov',
-          phone: first.phone || '+1 555-234-8901',
-          origin: first.origin || 'DEL',
-          destination: first.destination || 'JFK',
-          travelDate: first.travelDate || '2026-11-20',
-          source: 'Website Inbound Chat',
-          status: 'New Lead',
-          createdAt: new Date().toISOString()
-        }
-      });
-    }
+    const dismissedList = readJsonFile(DISMISSED_DUPLICATES_FILE, []);
+    const totalDetected = duplicates.length + dismissedList.length;
+    const mergedCount = dismissedList.length;
+    const pendingCount = duplicates.length;
+    const rateStr = totalDetected > 0 ? `${Math.round((mergedCount / totalDetected) * 1000) / 10}%` : '100%';
 
-    return res.json({ success: true, count: duplicates.length, data: duplicates });
+    const stats = {
+      detected: totalDetected,
+      merged: mergedCount,
+      reengaged: mergedCount,
+      pending: pendingCount,
+      preventionRate: rateStr
+    };
+
+    return res.json({ success: true, count: duplicates.length, data: duplicates, stats });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -482,19 +486,21 @@ router.post('/duplicates/dismiss', (req, res) => {
 router.get('/lifecycle/overview', async (req, res) => {
   try {
     const leads = await getAllLeadsList();
-    const PIPELINE_STAGES = [
+    const ALL_STAGES = [
       'NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFIED', 'QUOTE CREATED',
-      'QUOTE SENT', 'NEGOTIATION', 'PAYMENT PENDING', 'BOOKED', 'TICKETED', 'TRAVEL COMPLETED'
+      'QUOTE SENT', 'NEGOTIATION', 'PAYMENT PENDING', 'BOOKED', 'TICKETED', 'TRAVEL COMPLETED',
+      'LOST', 'NO RESPONSE'
     ];
     const stageCounts = {};
-    PIPELINE_STAGES.forEach(st => { stageCounts[st] = 0; });
+    ALL_STAGES.forEach(st => { stageCounts[st] = 0; });
 
     leads.forEach(l => {
       const st = (l.status || 'NEW').toUpperCase().trim();
-      const match = PIPELINE_STAGES.find(s => s === st || st.includes(s));
+      const match = ALL_STAGES.find(s => s === st || st.includes(s));
       if (match) stageCounts[match]++;
       else if (st === 'NEW LEAD') stageCounts['NEW']++;
       else if (st === 'PROPOSAL SENT') stageCounts['QUOTE SENT']++;
+      else if (st === 'SPAM' || st === 'CANCELLED' || st === 'DUPLICATE') stageCounts['LOST']++;
       else stageCounts['NEW']++;
     });
 
@@ -523,26 +529,62 @@ router.get('/:id/lifecycle', async (req, res) => {
     if (idx === -1) idx = currentStatus.includes('QUOTE') ? 5 : currentStatus.includes('TICKET') ? 9 : 0;
 
     const meta = metadataStore[lead.id] || {};
-    const defaultHistory = [
-      { from: 'NEW', to: 'ASSIGNED', user: 'System Auto-Router', role: 'System', time: '10:16 AM', duration: '1 min', sla: 'Met (1m)', reason: 'Matched Destination Skill Rule' },
-      { from: 'ASSIGNED', to: 'CONTACTED', user: lead.assignedAgent?.name || 'Sofia Rodriguez', role: 'Sales Agent', time: '10:18 AM', duration: '2 mins', sla: 'Met (2m < 5m target)', reason: 'Outbound Call Connected' }
-    ];
+
+    let expectedValue = 0;
+    if (typeof lead.budget === 'number') {
+      expectedValue = lead.budget;
+    } else if (lead.budget) {
+      const parts = String(lead.budget).split('-').map(p => Number(p.replace(/[^0-9]/g, ''))).filter(n => !isNaN(n) && n > 0);
+      expectedValue = parts.length > 0 ? Math.max(...parts) : (Number(String(lead.budget).replace(/[^0-9]/g, '')) || 0);
+    }
+
+    const actualAgent = lead.assignedAgent?.name || lead.agentName || 'Unassigned (General Pool)';
+    const actualRole = lead.assignedAgent?.role || (lead.assignedAgent ? 'Sales Agent' : 'System Auto-Intake');
+
+    let historyList = [];
+    if (Array.isArray(meta.lifecycleHistory) && meta.lifecycleHistory.length > 0) {
+      historyList = meta.lifecycleHistory;
+    } else if (Array.isArray(lead.activities) && lead.activities.length > 0) {
+      historyList = lead.activities.map((act) => ({
+        from: 'INTAKE',
+        to: (act.status || currentStatus).toUpperCase().replace('LEAD', '').trim(),
+        user: act.agent || actualAgent,
+        role: act.agent?.includes('CEO') ? 'Super Admin' : actualRole,
+        time: act.time || (lead.createdAt ? new Date(lead.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Initial'),
+        duration: '0 min',
+        sla: 'Met',
+        reason: act.comments || `Inbound lead intake via ${lead.source || 'Website'}`
+      }));
+    } else {
+      historyList = [
+        {
+          from: 'INTAKE',
+          to: currentStatus,
+          user: actualAgent,
+          role: actualRole,
+          time: lead.createdAt ? new Date(lead.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Initial',
+          duration: '0 min',
+          sla: 'Met',
+          reason: `Lead captured via ${lead.source || 'Direct Channel'}`
+        }
+      ];
+    }
 
     return res.json({
       success: true,
       data: {
         id: lead.id,
         customer: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Valued Customer',
-        route: `${lead.origin || 'DEL'} ➔ ${lead.destination || 'LHR'}`,
-        tripType: 'Round-Trip',
-        agent: lead.assignedAgent?.name || 'Sofia Rodriguez (Sales)',
-        teamLeader: 'Michael Chang',
+        route: lead.origin && lead.destination ? `${lead.origin} ➔ ${lead.destination}` : (lead.route || 'Route Not Specified'),
+        tripType: lead.tripType || (lead.returnDate ? 'Round-Trip' : 'One-Way'),
+        agent: actualAgent,
+        teamLeader: lead.teamLeader || lead.assignedAgent?.teamLeader || 'Operations / TL',
         currentStatusIndex: idx,
         currentStatus: PIPELINE_STAGES[idx] || 'CONTACTED',
-        expectedValue: Number(String(lead.budget || '2500').replace(/[^0-9]/g, '')) || 2500,
+        expectedValue,
         createdDate: lead.createdAt || new Date().toISOString(),
         slaStatus: '🟢 On Time (0 Delays)',
-        history: meta.lifecycleHistory || defaultHistory
+        history: historyList
       }
     });
   } catch (err) {

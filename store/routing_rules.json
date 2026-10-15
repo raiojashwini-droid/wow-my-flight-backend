@@ -43,5 +43,14 @@
     "condition": "Fallback Default",
     "action": "Sequential Agent Rotation (A ➔ B ➔ C)",
     "enabled": true
+  },
+  {
+    "id": 6,
+    "name": "High-Value VIP Flight Rule",
+    "priority": 1,
+    "type": "VIP Priority",
+    "condition": "Budget > 10000",
+    "action": "Assign to Super Admin Desk",
+    "enabled": true
   }
 ]
