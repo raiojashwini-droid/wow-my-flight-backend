@@ -212,8 +212,9 @@ app.use(cors({
   credentials: true,
 }));
 
-// Parse JSON — NOTE: Telnyx webhook route uses express.raw() internally
-app.use(express.json());
+// Parse JSON — with 50mb limit for travel document file uploads
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Health Check

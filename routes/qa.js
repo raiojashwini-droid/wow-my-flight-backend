@@ -45,8 +45,8 @@ router.get('/', async (req, res) => {
       }
     }
 
-    if (docs.length === 0 && QA_DOCUMENTS.length > 0) {
-      docs = [...QA_DOCUMENTS];
+    if (QA_DOCUMENTS.length > 0) {
+      docs = [...QA_DOCUMENTS, ...docs.filter(d => !QA_DOCUMENTS.some(qd => qd.id === d.id))];
     }
 
     let filtered = docs;
@@ -146,7 +146,9 @@ router.post('/documents', async (req, res) => {
       expiryDate: b.expiryDate || '2031-10-15',
       verifiedBy: 'Pending Review',
       status: 'Uploaded',
-      notes: b.notes || 'Uploaded via QA Dashboard.'
+      notes: b.notes || 'Uploaded via QA Dashboard.',
+      fileData: b.fileData || null,
+      fileType: b.fileType || 'application/pdf'
     };
 
     QA_DOCUMENTS.unshift(newDoc);
