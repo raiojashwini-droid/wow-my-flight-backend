@@ -1002,17 +1002,14 @@ router.patch('/:id/assign', async (req, res) => {
   try {
     const { id } = req.params;
     const { agentId } = req.body;
-
-    if (!agentId) {
-      return res.status(400).json({ success: false, error: 'agentId is required' });
-    }
+    const targetAgentId = agentId || null;
 
     let updated = null;
     if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
       try {
         updated = await prisma.lead.update({
           where: { id },
-          data: { assignedAgentId: agentId },
+          data: { assignedAgentId: targetAgentId },
           include: { assignedAgent: { select: { id: true, name: true, email: true } } }
         });
       } catch (dbErr) {
