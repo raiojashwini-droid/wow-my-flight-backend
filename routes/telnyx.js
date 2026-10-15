@@ -662,17 +662,27 @@ router.post('/dispositions', async (req, res) => {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(DISPOSITION_FILE, JSON.stringify(logs, null, 2), 'utf8');
 
-    // If phone matches a lead in DB, update lead status
-    if (phone && prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
+    // If phone or leadId matches a lead in DB, update lead status
+    if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
       try {
-        const cleanPhone = phone.replace(/\D/g, '');
-        const matchingLead = await prisma.lead.findFirst({
-          where: {
-            OR: [
-              { phone: { contains: cleanPhone.slice(-10) } }
-            ]
+        let matchingLead = null;
+        if (req.body.leadId) {
+          matchingLead = await prisma.lead.findUnique({
+            where: { id: req.body.leadId }
+          });
+        }
+        if (!matchingLead && phone) {
+          const cleanPhone = phone.replace(/\D/g, '');
+          if (cleanPhone.length >= 7) {
+            matchingLead = await prisma.lead.findFirst({
+              where: {
+                OR: [
+                  { phone: { contains: cleanPhone.slice(-10) } }
+                ]
+              }
+            });
           }
-        });
+        }
         if (matchingLead) {
           const leadStatusMap = {
             'Quote Sent': 'Proposal Sent',
@@ -686,6 +696,7 @@ router.post('/dispositions', async (req, res) => {
             where: { id: matchingLead.id },
             data: { status: nextStatus }
           });
+          newLog.linkedLead = `${matchingLead.name} (${matchingLead.id})`;
         }
       } catch (e) {
         console.warn('⚠️ [Disposition] Could not auto-sync lead status:', e.message);
@@ -698,6 +709,21 @@ router.post('/dispositions', async (req, res) => {
     }
 
     return res.json({ success: true, message: 'Disposition recorded successfully', log: newLog });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.delete('/dispositions/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    let logs = [];
+    if (fs.existsSync(DISPOSITION_FILE)) {
+      try { logs = JSON.parse(fs.readFileSync(DISPOSITION_FILE, 'utf8')); } catch (e) {}
+    }
+    const filtered = logs.filter(l => l.id !== id);
+    fs.writeFileSync(DISPOSITION_FILE, JSON.stringify(filtered, null, 2), 'utf8');
+    return res.json({ success: true, message: 'Disposition deleted' });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
