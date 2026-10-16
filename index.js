@@ -26,6 +26,7 @@ const paymentsRoutes = require('./routes/payments');
 const usersRoutes = require('./routes/users');
 const consultationsRoutes = require('./routes/consultations');
 const documentsRoutes = require('./routes/documents');
+const notificationsRoutes = require('./routes/notifications');
 // Phase 3 — Management Routes (API names matching sidebar menu names)
 const teamLeaderDashboardRoutes = require('./routes/teamLeaderDashboard');
 const qaRoutes = require('./routes/qa');
@@ -266,6 +267,7 @@ app.use('/api/agents', usersRoutes);
 app.use('/api/auth', usersRoutes);
 app.use('/api/consultations', consultationsRoutes);
 app.use('/api/documents', documentsRoutes);
+app.use('/api/notifications', notificationsRoutes);
 
 // Phase 3 — Management API Routes (Exact match to sidebar menu names)
 app.use('/api/team-leader-dashboard', teamLeaderDashboardRoutes);

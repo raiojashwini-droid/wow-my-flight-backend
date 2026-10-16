@@ -364,3 +364,21 @@ model Document {
   @@map("documents")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 14. Notifications & Alerts
+// ─────────────────────────────────────────────────────────────────────────────
+model Notification {
+  id        String   @id @default(uuid())
+  title     String
+  message   String
+  type      String   @default("system")
+  time      String?
+  read      Boolean  @default(false)
+  link      String?
+  userId    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("notifications")
+}
+
