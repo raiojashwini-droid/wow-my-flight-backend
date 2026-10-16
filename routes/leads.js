@@ -275,11 +275,21 @@ router.get('/distribution/workload', async (req, res) => {
 
     const allLeads = await getAllLeadsList();
 
-    const workloadData = agents.map((ag, i) => {
+    const workloadData = agents.map((ag) => {
       const assigned = allLeads.filter(l => l.assignedAgentId === ag.id || l.assignedAgent?.name === ag.name || l.assignedAgent?.id === ag.id);
-      const activeLeads = assigned.length > 0 ? assigned.length : (i === 0 ? 12 : i * 4 + 6);
-      const pendingFollowups = Math.max(1, Math.round(activeLeads * 0.25));
-      const pendingQuotes = Math.max(1, Math.round(activeLeads * 0.2));
+      const activeLeads = assigned.length;
+      const pendingFollowups = assigned.filter(l => {
+        const st = (l.status || '').toLowerCase();
+        return st.includes('follow') || st.includes('contact');
+      }).length;
+      const pendingQuotes = assigned.filter(l => {
+        const st = (l.status || '').toLowerCase();
+        return st.includes('quote');
+      }).length;
+      const todayBookings = assigned.filter(l => {
+        const st = (l.status || '').toLowerCase();
+        return st.includes('book') || st.includes('won');
+      }).length;
       const maxCap = 30;
       const status = activeLeads >= maxCap ? 'AT CAPACITY' : activeLeads >= 20 ? 'BUSY' : 'AVAILABLE';
       const color = status === 'AT CAPACITY' ? '#DC2626' : status === 'BUSY' ? '#D97706' : '#059669';
@@ -291,14 +301,33 @@ router.get('/distribution/workload', async (req, res) => {
         activeLeads,
         pendingFollowups,
         pendingQuotes,
-        todayBookings: Math.max(1, Math.round(activeLeads * 0.15)),
+        todayBookings,
         maxCapacity: maxCap,
         status,
         color
       };
     });
 
-    return res.json({ success: true, data: workloadData });
+    const totalIncoming = allLeads.length;
+    const autoAssigned = allLeads.filter(l => l.assignedAgentId || l.assignedAgent?.name).length;
+    const unassigned = Math.max(0, totalIncoming - autoAssigned);
+    const distHistory = readJsonFile(DIST_HISTORY_FILE, []);
+    const roundRobin = distHistory.filter(h => (h.method || '').toLowerCase().includes('round')).length;
+    const skillBased = distHistory.filter(h => (h.method || '').toLowerCase().includes('skill')).length;
+    const capacityBased = distHistory.filter(h => (h.method || '').toLowerCase().includes('capacity')).length;
+    const performanceBased = distHistory.filter(h => (h.method || '').toLowerCase().includes('performance') || (h.method || '').toLowerCase().includes('manual') || (h.method || '').toLowerCase().includes('vip')).length;
+
+    const stats = {
+      incomingLeads: totalIncoming,
+      autoAssigned,
+      unassigned,
+      roundRobin,
+      skillBased,
+      capacityBased,
+      performanceBased
+    };
+
+    return res.json({ success: true, data: workloadData, stats });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -339,16 +368,40 @@ router.post('/distribution/rules', (req, res) => {
 
 router.post('/distribution/reassign', async (req, res) => {
   try {
-    const { leadId, targetAgent, reason } = req.body;
-    if (!leadId || !targetAgent) {
+    const { leadId, targetAgent, targetAgentId, reason } = req.body;
+    if (!leadId || (!targetAgent && !targetAgentId)) {
       return res.status(400).json({ success: false, error: 'leadId and targetAgent required' });
     }
 
+    let targetUser = null;
     if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
       try {
+        targetUser = await prisma.user.findFirst({
+          where: {
+            OR: [
+              { id: targetAgentId || targetAgent },
+              { name: targetAgent }
+            ]
+          }
+        });
+      } catch (e) { }
+    }
+    const finalAgentId = targetUser ? targetUser.id : (targetAgentId || targetAgent);
+    const finalAgentName = targetUser ? targetUser.name : (req.body.targetAgentName || targetAgent);
+
+    let prevAgentName = req.body.prevAgent || 'Unassigned';
+    if (prisma && (typeof isDbConnected !== 'function' || isDbConnected())) {
+      try {
+        const currentLead = await prisma.lead.findUnique({
+          where: { id: leadId },
+          include: { assignedAgent: true }
+        });
+        if (currentLead && currentLead.assignedAgent) {
+          prevAgentName = currentLead.assignedAgent.name;
+        }
         await prisma.lead.update({
           where: { id: leadId },
-          data: { assignedAgentId: targetAgent }
+          data: { assignedAgentId: finalAgentId }
         });
       } catch (e) {
         console.warn('⚠️ [Reassign] DB update fallback:', e.message);
@@ -359,9 +412,9 @@ router.post('/distribution/reassign', async (req, res) => {
     const newLog = {
       id: `LOG-${Math.floor(100 + Math.random() * 900)}`,
       leadId,
-      prevAgent: req.body.prevAgent || 'Sarah Jenkins',
-      newAgent: targetAgent,
-      method: 'Manual Reassignment',
+      prevAgent: prevAgentName,
+      newAgent: finalAgentName,
+      method: req.body.method || 'Manual Reassignment',
       assignedBy: req.body.assignedBy || 'Team Leader',
       time: new Date().toISOString().slice(0, 16).replace('T', ' '),
       reason: reason || 'Manual Load Balancing by TL'
@@ -371,7 +424,7 @@ router.post('/distribution/reassign', async (req, res) => {
 
     const io = req.app.get('io');
     if (io) {
-      io.to('agents_group').emit('lead:assigned', { leadId, agent: targetAgent, log: newLog });
+      io.to('agents_group').emit('lead:assigned', { leadId, agent: finalAgentName, log: newLog });
     }
 
     return res.json({ success: true, message: `Lead ${leadId} reassigned successfully`, log: newLog });
