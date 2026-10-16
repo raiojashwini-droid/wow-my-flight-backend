@@ -366,6 +366,14 @@ router.post('/distribution/rules', (req, res) => {
   return res.status(201).json({ success: true, data: newRule });
 });
 
+router.delete('/distribution/rules/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const rules = readJsonFile(RULES_FILE, []);
+  const filtered = rules.filter(r => r.id !== id);
+  writeJsonFile(RULES_FILE, filtered);
+  return res.json({ success: true, message: 'Rule deleted successfully' });
+});
+
 router.post('/distribution/reassign', async (req, res) => {
   try {
     const { leadId, targetAgent, targetAgentId, reason } = req.body;
