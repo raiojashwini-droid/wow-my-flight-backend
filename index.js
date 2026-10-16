@@ -35,6 +35,7 @@ const financeRoutes = require('./routes/finance');
 const managementReportsRoutes = require('./routes/managementReports');
 const permissionControlRoutes = require('./routes/permissionControl');
 const auditTrailRoutes = require('./routes/auditTrail');
+const afterSalesRoutes = require('./routes/afterSales');
 const chatStore = require('./store/chatStore');
 const { isDbConnected, checkConnection } = require('./db');
 
@@ -277,6 +278,8 @@ app.use('/api/management-reports', managementReportsRoutes);
 app.use('/api/permission-control', permissionControlRoutes);
 app.use('/api/permission-management', permissionControlRoutes);
 app.use('/api/audit-trail', auditTrailRoutes);
+app.use('/api/after-sales', afterSalesRoutes);
+app.use('/api/after_sales', afterSalesRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 404 Handler

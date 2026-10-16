@@ -56,6 +56,12 @@ router.post('/', async (req, res) => {
     const bookingId = body.bookingId || `BK-${Math.floor(1000 + Math.random() * 9000)}`;
     const pnr = body.pnr || (body.pnrCode || `PNR${Math.random().toString(36).substring(2, 6).toUpperCase()}`);
     
+    const toCurrencyStr = (val, fallback) => {
+      if (val === undefined || val === null || val === '') return fallback;
+      if (typeof val === 'number') return `$${val.toFixed(2)}`;
+      return String(val);
+    };
+
     const newRecord = {
       bookingId,
       pnr,
@@ -66,10 +72,10 @@ router.post('/', async (req, res) => {
       route: body.route || `${body.origin || 'DEL'} → ${body.destination || 'BOM'}`,
       origin: body.origin || '',
       destination: body.destination || '',
-      fare: body.fare || '$450.00',
-      taxes: body.taxes || '$80.00',
-      commission: body.commission || '$45.00 (10%)',
-      amount: body.amount || body.totalAmount || '$530.00',
+      fare: toCurrencyStr(body.fare || body.netFare, '$450.00'),
+      taxes: toCurrencyStr(body.taxes, '$80.00'),
+      commission: toCurrencyStr(body.commission, '$45.00 (10%)'),
+      amount: toCurrencyStr(body.amount || body.totalAmount || body.sellingPrice, '$530.00'),
       paymentStatus: body.paymentStatus || 'Payment Confirmed',
       ticketStatus: body.ticketStatus || 'Ready to Issue',
       timeLimit: body.timeLimit || '24h remaining',
@@ -80,9 +86,9 @@ router.post('/', async (req, res) => {
       date: body.date || new Date().toLocaleDateString(),
       cabinClass: body.cabinClass || 'Economy',
       passengers: Number(body.passengers) || 1,
-      airlineCode: body.airlineCode || '',
+      airlineCode: body.airlineCode || body.airline || '',
       flightNumber: body.flightNumber || '',
-      notes: body.notes || ''
+      notes: typeof body.notes === 'string' ? body.notes : (body.notes ? JSON.stringify(body.notes) : '')
     };
 
     let createdBooking = null;
