@@ -80,21 +80,5 @@
     "status": "Active",
     "createdAt": "2026-10-15T10:59:54.860Z",
     "updatedAt": "2026-10-15T10:59:54.860Z"
-  },
-  "CL-3592": {
-    "id": "CL-3592",
-    "firstName": "aaaa",
-    "lastName": "kkkk",
-    "email": "asd@gmail.com",
-    "phone": "+916261508179",
-    "city": "High-tech",
-    "country": "India",
-    "nationality": "India",
-    "preferredCabinClass": "First Class",
-    "tier": "Standard",
-    "totalSpent": 0,
-    "status": "Active",
-    "createdAt": "2026-10-15T11:03:19.950Z",
-    "updatedAt": "2026-10-15T11:03:19.950Z"
   }
 }
