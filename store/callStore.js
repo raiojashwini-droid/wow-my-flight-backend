@@ -210,6 +210,40 @@ function getActiveCall(agentId) {
   return null;
 }
 
+function deleteCallLog(idOrControlId) {
+  if (!idOrControlId) return false;
+  const target = String(idOrControlId);
+
+  // Remove from in-memory callLogs
+  for (let i = callLogs.length - 1; i >= 0; i--) {
+    const l = callLogs[i];
+    if (String(l.id) === target || String(l.callControlId) === target) {
+      callLogs.splice(i, 1);
+    }
+  }
+
+  // Remove from activeCalls
+  if (activeCalls.has(target)) {
+    activeCalls.delete(target);
+  }
+
+  // Remove from PostgreSQL
+  if (prisma) {
+    prisma.callLog.deleteMany({
+      where: {
+        OR: [
+          { id: target },
+          { callControlId: target }
+        ]
+      }
+    }).catch((err) => {
+      console.warn('[PostgreSQL] Async callLog delete warning:', err.message);
+    });
+  }
+
+  return true;
+}
+
 module.exports = {
   createCallLog,
   updateCallLog,
@@ -220,5 +254,6 @@ module.exports = {
   getCallLogs,
   getCallByControlId,
   getActiveCall,
+  deleteCallLog,
   activeCalls,
 };

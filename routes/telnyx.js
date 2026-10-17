@@ -414,6 +414,18 @@ router.get('/calls/history', (req, res) => {
   }
 });
 
+// 6.5. DELETE /api/telnyx/calls/:id
+router.delete('/calls/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    callStore.deleteCallLog(id);
+    res.json({ success: true, message: 'Call log deleted successfully' });
+  } catch (err) {
+    console.error('[Telnyx] DELETE /calls/:id error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. POST /api/telnyx/sms/send
 //    Sends an SMS to a customer using the messaging profile
