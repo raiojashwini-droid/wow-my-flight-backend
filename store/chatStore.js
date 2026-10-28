@@ -98,6 +98,21 @@ function createSession({ customerName, customerEmail, customerPhone }) {
 }
 
 /**
+ * Format session with live unread count and last message
+ */
+function formatSession(s) {
+  if (!s) return null;
+  const sessionMessages = messages.filter(m => m.sessionId === s.id);
+  const unreadCount = sessionMessages.filter(m => m.senderType === 'customer' && m.status !== 'read').length;
+  const lastMsgObj = sessionMessages[sessionMessages.length - 1];
+  return {
+    ...s,
+    unreadCount,
+    lastMessage: lastMsgObj ? lastMsgObj.text : s.lastMessage || null,
+  };
+}
+
+/**
  * Get a session by ID
  */
 function getSession(sessionId) {
@@ -105,10 +120,20 @@ function getSession(sessionId) {
 }
 
 /**
+ * Get session decorated with unread count and last message
+ */
+function getSessionWithStats(sessionId) {
+  const s = getSession(sessionId);
+  return formatSession(s);
+}
+
+/**
  * Get all chat sessions (for the agent dashboard)
  */
 function getAllSessions() {
-  return chatSessions.sort((a, b) => new Date(b.lastActivityAt) - new Date(a.lastActivityAt));
+  return chatSessions
+    .map(formatSession)
+    .sort((a, b) => new Date(b.lastActivityAt) - new Date(a.lastActivityAt));
 }
 
 /**
@@ -127,6 +152,44 @@ function resolveSession(sessionId) {
     }
   }
   return session;
+}
+
+/**
+ * Atomically claim/accept a chat session for an agent (single-agent acceptance)
+ */
+function claimSession(sessionId, agentId) {
+  const session = getSession(sessionId);
+  if (!session) {
+    return { success: false, reason: 'NOT_FOUND', message: 'Chat request not found.' };
+  }
+  if (session.status !== 'active') {
+    return { success: false, reason: 'NOT_ACTIVE', message: 'Chat session is no longer active.' };
+  }
+  if (session.agentId) {
+    if (session.agentId === agentId) {
+      return { success: true, session, alreadyAssigned: true };
+    }
+    return {
+      success: false,
+      reason: 'ALREADY_CLAIMED',
+      assignedAgentId: session.agentId,
+      message: 'This chat request has already been accepted by another agent.'
+    };
+  }
+
+  // Atomically claim session in memory
+  session.agentId = agentId;
+  session.lastActivityAt = new Date().toISOString();
+
+  // Background persistence to DB using atomic updateMany with agentId: null filter
+  if (prisma) {
+    prisma.chatSession.updateMany({
+      where: { id: sessionId, agentId: null },
+      data: { agentId, lastActivityAt: new Date(session.lastActivityAt) }
+    }).catch(err => console.warn('[LiveChat] DB atomic claim error:', err.message));
+  }
+
+  return { success: true, session };
 }
 
 /**
@@ -234,10 +297,11 @@ function addMessage({ sessionId, senderType, senderId, senderName, text, type, a
 
 /**
  * Get all messages for a specific session
+ * If isStaff is false, internal team notes (type === 'note') are strictly excluded
  */
-function getMessagesForSession(sessionId) {
+function getMessagesForSession(sessionId, isStaff = true) {
   return messages
-    .filter(m => m.sessionId === sessionId)
+    .filter(m => m.sessionId === sessionId && (isStaff || m.type !== 'note'))
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 }
 
@@ -255,15 +319,68 @@ function markMessagesAsRead(sessionId, readerType) {
   return updated;
 }
 
+// ─── INTERNAL TEAM MESSAGES (STAFF-TO-STAFF ONLY) ─────────────────────────
+const teamMessages = [
+  {
+    id: 'team-seed-1',
+    channelId: 'general-desk',
+    senderId: 'admin-1',
+    senderName: 'Alex Turner',
+    senderRole: 'System Mgr',
+    text: 'Good day team! Please note that British Airways has updated baggage policies on transatlantic routes.',
+    timestamp: new Date(Date.now() - 3600000 * 2).toISOString()
+  },
+  {
+    id: 'team-seed-2',
+    channelId: 'general-desk',
+    senderId: 'ops-1',
+    senderName: 'Emily Davis',
+    senderRole: 'Operations Lead',
+    text: 'Noted Alex. Ticketing desk is currently reviewing pending PNR queues.',
+    timestamp: new Date(Date.now() - 3600000 * 1).toISOString()
+  },
+  {
+    id: 'team-seed-3',
+    channelId: 'ticketing-ops',
+    senderId: 'ticket-1',
+    senderName: 'Michael Brown',
+    senderRole: 'Ticketing Desk',
+    text: 'Sabre GDS terminal is fully operational. All queues cleared till 5 PM.',
+    timestamp: new Date(Date.now() - 1800000).toISOString()
+  }
+];
+
+function getTeamMessages(channelId) {
+  return teamMessages.filter(m => !channelId || m.channelId === channelId);
+}
+
+function addTeamMessage({ channelId = 'general-desk', senderId, senderName, senderRole, text }) {
+  const newMsg = {
+    id: uuidv4(),
+    channelId,
+    senderId: senderId || 'agent-1',
+    senderName: senderName || 'Staff Agent',
+    senderRole: senderRole || 'Staff',
+    text: text || '',
+    timestamp: new Date().toISOString()
+  };
+  teamMessages.push(newMsg);
+  return newMsg;
+}
+
 module.exports = {
   createSession,
   getSession,
+  getSessionWithStats,
   getAllSessions,
   resolveSession,
+  claimSession,
   assignAgentToSession,
   unassignSession,
   blockSession,
   addMessage,
   getMessagesForSession,
   markMessagesAsRead,
+  getTeamMessages,
+  addTeamMessage,
 };

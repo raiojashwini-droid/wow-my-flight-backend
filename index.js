@@ -39,7 +39,7 @@ const auditTrailRoutes = require('./routes/auditTrail');
 const afterSalesRoutes = require('./routes/afterSales');
 const settingsRoutes = require('./routes/settings');
 const chatStore = require('./store/chatStore');
-const { isDbConnected, checkConnection } = require('./db');
+const { prisma, isDbConnected, checkConnection } = require('./db');
 
 const app = express();
 const server = http.createServer(app);
@@ -77,14 +77,49 @@ const io = new Server(server, {
 // Make io accessible in route handlers via req.app.get('io')
 app.set('io', io);
 
+// Track connected agents: socket.id -> { agentId, agentName, role, status }
+const connectedAgents = new Map();
+const SUPPORT_ROLES = ['consultant', 'sales_agent', 'agent', 'team_leader', 'expert_team_leader', 'admin', 'super_admin', 'operations', 'marketing', 'finance', 'flight_expert', 'ticketing_agent'];
+
 io.on('connection', (socket) => {
   console.log(`[Socket.io] Client connected: ${socket.id}`);
 
-  // --- EXISTING LOGIC: Agent identifies themselves ---
-  socket.on('agent:register', ({ agentId, agentName }) => {
-    socket.join(`agent:${agentId}`); // Join agent-specific room
-    socket.join('agents_group'); // All agents join this room to get global notifications
-    console.log(`[Socket.io] Agent registered: ${agentName} (${agentId})`);
+  // --- AGENT REGISTRATION & AVAILABILITY ---
+  socket.on('agent:register', ({ agentId, agentName, role, status = 'available' }) => {
+    socket.join(`agent:${agentId}`);
+    
+    // Store agent connection and availability
+    connectedAgents.set(socket.id, {
+      agentId,
+      agentName,
+      role: role || 'agent',
+      status: status || 'available',
+    });
+
+    const isAuthorized = !role || SUPPORT_ROLES.includes(role);
+    const isAvailable = status !== 'offline' && status !== 'unavailable';
+
+    if (isAuthorized && isAvailable) {
+      socket.join('agents_group');
+      console.log(`[Socket.io] Available support agent registered: ${agentName} (${agentId}, ${role || 'agent'})`);
+    } else {
+      socket.leave('agents_group');
+      console.log(`[Socket.io] Agent registered (non-available or restricted): ${agentName} (${agentId})`);
+    }
+  });
+
+  // Update agent availability status dynamically
+  socket.on('agent:set_status', ({ status }) => {
+    const agent = connectedAgents.get(socket.id);
+    if (agent) {
+      agent.status = status;
+      const isAuthorized = !agent.role || SUPPORT_ROLES.includes(agent.role);
+      if (isAuthorized && status === 'available') {
+        socket.join('agents_group');
+      } else {
+        socket.leave('agents_group');
+      }
+    }
   });
 
   // --- LIVE CHAT LOGIC ---
@@ -95,35 +130,113 @@ io.on('connection', (socket) => {
     socket.join(`chat_${session.id}`); // Customer joins their own chat room
     console.log(`[Socket.io] Chat session created: ${session.id}`);
     
-    // Notify all agents that a new chat has started
+    // Minimal incoming request payload (no private messages/sensitive data exposed)
+    const incomingNotification = {
+      chatRequestId: session.id,
+      customerName: session.customerName || 'Website Visitor',
+      requestTime: session.createdAt,
+    };
+
+    // Notify all currently available and authorized support agents
+    io.to('agents_group').emit('chat:incoming_request', incomingNotification);
+    
+    // Maintain backwards compatibility with existing workspace list
     io.to('agents_group').emit('chat:new_session', session);
+
+    // Persist real-time alert into notification system for Bell icon popover
+    if (notificationsRoutes && typeof notificationsRoutes.addNotification === 'function') {
+      notificationsRoutes.addNotification({
+        id: `chat-${session.id}`,
+        sessionId: session.id,
+        title: 'Incoming Website Chat',
+        message: `${session.customerName || 'Website Visitor'} initiated a live chat inquiry.`,
+        type: 'chat',
+        read: false,
+        link: '/live-chat',
+        createdAt: session.createdAt,
+      });
+    }
     
     if (callback) callback({ sessionId: session.id });
   });
 
-  // 1.5 Customer rejoins a chat after refresh
+  // 1.5 Customer rejoins a chat after refresh (strictly exclude internal staff notes)
   socket.on('chat:customer_rejoin', ({ sessionId }, callback) => {
     const session = chatStore.getSession(sessionId);
     if (session) {
       socket.join(`chat_${sessionId}`);
-      const messages = chatStore.getMessagesForSession(sessionId);
+      const messages = chatStore.getMessagesForSession(sessionId, false);
       if (callback) callback({ success: true, session, messages });
     } else {
       if (callback) callback({ success: false, error: 'Session not found' });
     }
   });
 
+  // 1.8 Accept incoming chat request (Atomic single-agent assignment)
+  socket.on('chat:accept_request', ({ sessionId, agentId, agentName }, callback) => {
+    if (!sessionId || !agentId) {
+      if (callback) callback({ success: false, reason: 'INVALID_PARAMS', message: 'Session ID and Agent ID required.' });
+      return;
+    }
+
+    const claimResult = chatStore.claimSession(sessionId, agentId);
+    if (!claimResult.success) {
+      // Chat already claimed by another agent or not active
+      if (callback) callback(claimResult);
+      return;
+    }
+
+    // Single winning agent joins the customer's chat room
+    socket.join(`chat_${sessionId}`);
+    
+    // Notify customer in the room that this agent has joined
+    io.to(`chat_${sessionId}`).emit('chat:agent_joined', { agentId, agentName });
+
+    // Notify ALL other agents that this request is claimed so their notification dismisses
+    io.to('agents_group').emit('chat:request_claimed', {
+      chatRequestId: sessionId,
+      assignedAgentId: agentId,
+      assignedAgentName: agentName,
+    });
+
+    // Broadcast updated session state to agent workspaces
+    io.to('agents_group').emit('chat:session_updated', claimResult.session);
+
+    const messages = chatStore.getMessagesForSession(sessionId);
+    if (callback) callback({ success: true, session: claimResult.session, messages });
+  });
+
   // 2. Customer or Agent sends a message
   socket.on('chat:send_message', (messageData, callback) => {
     const { sessionId, senderType, senderId, senderName, text, type, attachment } = messageData;
+    const session = chatStore.getSession(sessionId);
+
+    // Authorization check: if an agent sends a message, verify they are the assigned agent (or chat is unassigned)
+    if (senderType === 'agent' && session) {
+      if (session.agentId && session.agentId !== senderId) {
+        if (callback) callback({ success: false, error: 'Unauthorized: Chat is assigned to another agent.' });
+        return;
+      }
+      if (!session.agentId) {
+        // Automatically claim if sending first message
+        chatStore.claimSession(sessionId, senderId);
+      }
+    }
+
     const msg = chatStore.addMessage({ sessionId, senderType, senderId, senderName, text, type, attachment });
     
     if (msg) {
-      // Send the message to the specific chat room (both customer and joined agent will receive it)
-      io.to(`chat_${sessionId}`).emit('chat:receive_message', msg);
+      if (msg.type === 'note') {
+        // Internal team note: strictly route ONLY to authorized staff (agents_group)
+        // NEVER broadcast internal notes to customer socket in chat_${sessionId}
+        io.to('agents_group').emit('chat:receive_message', msg);
+      } else {
+        // Public message: Send to the chat room for customer and agent
+        io.to(`chat_${sessionId}`).emit('chat:receive_message', msg);
+      }
       
       // Update session activity for agent's list
-      io.to('agents_group').emit('chat:session_updated', chatStore.getSession(sessionId));
+      io.to('agents_group').emit('chat:session_updated', chatStore.getSessionWithStats(sessionId));
       
       if (callback) callback({ success: true, message: msg });
     } else {
@@ -145,25 +258,59 @@ io.on('connection', (socket) => {
     if (updated) {
       // Broadcast back to the room so the sender can see the read ticks
       io.to(`chat_${sessionId}`).emit('chat:messages_read', { sessionId, readerType });
+      // Notify agents group of updated session stats (unreadCount: 0)
+      const updatedSession = chatStore.getSessionWithStats(sessionId);
+      if (updatedSession) {
+        io.to('agents_group').emit('chat:session_updated', updatedSession);
+      }
     }
   });
 
   // 4. Agent joins a specific customer's chat room to reply
   socket.on('chat:agent_join_room', ({ sessionId, agentId }, callback) => {
+    const session = chatStore.getSession(sessionId);
+    if (!session) {
+      if (callback) callback({ success: false, error: 'Session not found' });
+      return;
+    }
+
+    // If chat is already assigned to another agent, prevent unauthorized joining
+    if (session.agentId && session.agentId !== agentId) {
+      if (callback) callback({
+        success: false,
+        reason: 'ALREADY_ASSIGNED',
+        assignedAgentId: session.agentId,
+        message: 'This chat is already assigned to another agent.'
+      });
+      return;
+    }
+
+    // Atomically claim session if unassigned
+    if (!session.agentId) {
+      const claimResult = chatStore.claimSession(sessionId, agentId);
+      if (!claimResult.success) {
+        if (callback) callback(claimResult);
+        return;
+      }
+      io.to('agents_group').emit('chat:request_claimed', {
+        chatRequestId: sessionId,
+        assignedAgentId: agentId,
+      });
+    }
+
     socket.join(`chat_${sessionId}`);
-    const session = chatStore.assignAgentToSession(sessionId, agentId);
     
     // Send previous messages to the agent
     const messages = chatStore.getMessagesForSession(sessionId);
     
-    // Notify everyone in the room that an agent has joined
+    // Notify room that agent has joined
     io.to(`chat_${sessionId}`).emit('chat:agent_joined', { agentId });
-    io.to('agents_group').emit('chat:session_updated', session);
+    io.to('agents_group').emit('chat:session_updated', chatStore.getSessionWithStats(sessionId));
 
-    if (callback) callback({ success: true, messages });
+    if (callback) callback({ success: true, messages, session: chatStore.getSessionWithStats(sessionId) });
   });
 
-  // 4. Get active sessions (requested by agent dashboard on mount)
+  // 4.5 Get active sessions (requested by agent dashboard on mount)
   socket.on('chat:get_active_sessions', (data, callback) => {
     const sessions = chatStore.getAllSessions();
     if (typeof callback === 'function') {
@@ -202,7 +349,31 @@ io.on('connection', (socket) => {
     }
   });
 
+  // 8. ─── INTERNAL TEAM CHAT (STAFF ONLY) ──────────────────────────────────
+  socket.on('team:get_messages', ({ channelId }, callback) => {
+    const msgs = chatStore.getTeamMessages(channelId);
+    if (typeof callback === 'function') {
+      callback({ success: true, messages: msgs });
+    }
+  });
+
+  socket.on('team:send_message', (msgData, callback) => {
+    const newMsg = chatStore.addTeamMessage(msgData);
+    if (newMsg) {
+      // Broadcast strictly to agents_group (customers never in this room)
+      io.to('agents_group').emit('team:receive_message', newMsg);
+      if (typeof callback === 'function') {
+        callback({ success: true, message: newMsg });
+      }
+    } else {
+      if (typeof callback === 'function') {
+        callback({ success: false, error: 'Could not send team message' });
+      }
+    }
+  });
+
   socket.on('disconnect', () => {
+    connectedAgents.delete(socket.id);
     console.log(`[Socket.io] Client disconnected: ${socket.id}`);
   });
 });
